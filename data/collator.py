@@ -25,11 +25,17 @@ class RNAOmniCollator:
         task_ratios: Dict[str, float],
         pair_negative_ratio: int = 3,
         seed: int | None = None,
+        ablation: Dict[str, object] | None = None,
     ) -> None:
         self.tokenizer = tokenizer
         self.task_ratios = task_ratios
         self.pair_negative_ratio = pair_negative_ratio
         self.rng = random.Random(seed)
+        self.ablation = ablation or {}
+        self.use_pair_aware_masking = bool(self.ablation.get("use_pair_aware_masking", True))
+        self.use_motif_span_masking = bool(self.ablation.get("use_motif_span_masking", True))
+        self.use_motif_condition = bool(self.ablation.get("use_motif_condition", True))
+        self.use_family_condition = bool(self.ablation.get("use_family_condition", True))
         weights = [float(task_ratios.get(task, 0.0)) for task in self.task_names]
         if sum(weights) <= 0:
             raise ValueError("At least one task sampling ratio must be positive.")
@@ -54,6 +60,8 @@ class RNAOmniCollator:
         struct_positions = torch.full((len(examples), max_len), -1, dtype=torch.long)
         pair_labels = torch.zeros((len(examples), max_len, max_len), dtype=torch.float32)
         pair_mask = torch.zeros((len(examples), max_len, max_len), dtype=torch.bool)
+        pair_positive_counts = torch.zeros(len(examples), dtype=torch.long)
+        pair_negative_counts = torch.zeros(len(examples), dtype=torch.long)
 
         for batch_idx, example in enumerate(examples):
             token_count = len(example["input_ids"])
@@ -64,12 +72,14 @@ class RNAOmniCollator:
             segment_ids[batch_idx, :token_count] = torch.tensor(example["segment_ids"], dtype=torch.long)
             seq_positions[batch_idx, :length] = torch.tensor(example["seq_positions"], dtype=torch.long)
             struct_positions[batch_idx, :length] = torch.tensor(example["struct_positions"], dtype=torch.long)
-            self._fill_pair_tensors(
+            positive_count, negative_count = self._fill_pair_tensors(
                 pair_labels[batch_idx],
                 pair_mask[batch_idx],
                 example["pairs"],
                 length,
             )
+            pair_positive_counts[batch_idx] = positive_count
+            pair_negative_counts[batch_idx] = negative_count
 
         task_names = [example["task_name"] for example in examples]
         task_ids = torch.tensor([self.tokenizer.task_to_id[name] for name in task_names], dtype=torch.long)
@@ -84,11 +94,14 @@ class RNAOmniCollator:
             "time_steps": torch.tensor([example["time_step"] for example in examples], dtype=torch.float32),
             "pair_labels": pair_labels,
             "pair_mask": pair_mask,
+            "pair_positive_counts": pair_positive_counts,
+            "pair_negative_counts": pair_negative_counts,
             "seq_positions": seq_positions,
             "struct_positions": struct_positions,
             "lengths": torch.tensor([example["length"] for example in examples], dtype=torch.long),
             "raw_seq": [example["raw_seq"] for example in examples],
             "raw_struct": [example["raw_struct"] for example in examples],
+            "raw_pairs": [example["pairs"] for example in examples],
         }
 
     def _build_example(self, sample: dict, task_name: str, time_step: float, mask_ratio: float) -> dict:
@@ -104,15 +117,17 @@ class RNAOmniCollator:
 
         add(self.tokenizer.task_token(task_name), 0)
 
-        if task_name == "motif_control":
+        if task_name == "motif_control" and (self.use_family_condition or self.use_motif_condition):
             family = sample.get("family") or ""
-            add("<FAMILY>", 3)
-            add(self.tokenizer.family_token(family), 3)
-            add("</FAMILY>", 3)
-            add("<MOTIF>", 3)
-            for motif in sample.get("motifs", []):
-                add(self.tokenizer.motif_token(motif.get("type")), 3)
-            add("</MOTIF>", 3)
+            if self.use_family_condition:
+                add("<FAMILY>", 3)
+                add(self.tokenizer.family_token(family), 3)
+                add("</FAMILY>", 3)
+            if self.use_motif_condition:
+                add("<MOTIF>", 3)
+                for motif in sample.get("motifs", []):
+                    add(self.tokenizer.motif_token(motif.get("type")), 3)
+                add("</MOTIF>", 3)
 
         add("<SEQ>", 1)
         for base in sample["seq"]:
@@ -168,11 +183,14 @@ class RNAOmniCollator:
             return list(seq_positions) + list(struct_positions)
 
         length = sample["length"]
-        if sample.get("motifs") and self.rng.random() < 0.6:
+        if not self.use_pair_aware_masking and not self.use_motif_span_masking:
+            nucleotide_positions = set(random_token_mask(list(range(length)), mask_ratio, self.rng))
+        elif self.use_motif_span_masking and sample.get("motifs") and self.rng.random() < 0.6:
             nucleotide_positions = motif_span_mask_positions(sample["motifs"], length, self.rng)
         else:
             nucleotide_positions = random_span_positions(length, mask_ratio, self.rng)
-        nucleotide_positions = pair_aware_mask_positions(nucleotide_positions, sample.get("pairs", []))
+        if self.use_pair_aware_masking:
+            nucleotide_positions = pair_aware_mask_positions(nucleotide_positions, sample.get("pairs", []))
         token_positions = []
         for nuc_idx in sorted(pos for pos in nucleotide_positions if 0 <= pos < length):
             token_positions.append(seq_positions[nuc_idx])
@@ -185,7 +203,7 @@ class RNAOmniCollator:
         mask: torch.Tensor,
         pairs: Sequence[Sequence[int]],
         length: int,
-    ) -> None:
+    ) -> tuple[int, int]:
         positive = set()
         for raw_i, raw_j in pairs:
             i, j = int(raw_i), int(raw_j)
@@ -199,11 +217,11 @@ class RNAOmniCollator:
 
         candidates = [(i, j) for i in range(length) for j in range(i + 1, length) if (i, j) not in positive]
         if not candidates:
-            return
+            return len(positive), 0
         if positive:
             neg_count = min(len(candidates), max(1, len(positive) * self.pair_negative_ratio))
         else:
             neg_count = min(len(candidates), max(1, length))
         for i, j in self.rng.sample(candidates, neg_count):
             mask[i, j] = True
-
+        return len(positive), neg_count

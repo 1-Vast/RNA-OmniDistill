@@ -80,6 +80,11 @@ class RNAOmniDataset:
             raise ValueError(f"{self.path}:{line_no} invalid dot-bracket structure: {exc}") from exc
 
         pairs = self._normalize_pairs(raw.get("pairs"), len(seq), parsed_pairs)
+        if raw.get("pairs") is not None and set(pairs) != set(parsed_pairs):
+            self._warn_or_raise(
+                f"{self.path}:{line_no} provided pairs do not match struct; using pairs parsed from struct."
+            )
+            pairs = parsed_pairs
         motifs = raw.get("motifs")
         if not motifs:
             motifs = infer_simple_motifs(seq=seq, struct=struct, pairs=pairs)
@@ -90,7 +95,7 @@ class RNAOmniDataset:
             "id": str(raw.get("id", f"{self.path.stem}_{line_no:06d}")),
             "seq": seq,
             "struct": struct,
-            "family": str(raw.get("family", "")) if raw.get("family") is not None else "",
+            "family": str(raw.get("family", "OTHER") or "OTHER"),
             "motifs": motifs,
             "pairs": pairs,
             "length": len(seq),
@@ -145,4 +150,3 @@ class RNAOmniDataset:
                 }
             )
         return motifs or infer_simple_motifs(seq="N" * length, pairs=[])
-

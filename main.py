@@ -4,25 +4,38 @@ import argparse
 import json
 import math
 import random
+import sys
+import time
 from pathlib import Path
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, Iterable, Sequence
 
 import torch
 import yaml
 from torch.optim import AdamW
-from torch.utils.data import DataLoader
+from torch.utils.data import BatchSampler, DataLoader, Sampler, Subset
 
 from data.collator import RNAOmniCollator
 from data.dataset import RNAOmniDataset
 from data.tokenizer import RNAOmniTokenizer
 from models.decoding import generate_sequence_invfold, generate_structure_seq2struct
 from models.rna_omnidiffusion import RNAOmniDiffusion, compute_omni_loss
-from utils.metrics import base_pair_f1, token_accuracy
+from utils.metrics import base_pair_f1, evaluate_structures
 
 
 def load_config(path: str | Path) -> Dict[str, Any]:
     with Path(path).open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
+        config = yaml.safe_load(handle)
+    return apply_ablation_settings(config)
+
+
+def apply_ablation_settings(config: Dict[str, Any]) -> Dict[str, Any]:
+    ablation = config.get("ablation", {}) or {}
+    decoding = config.setdefault("decoding", {})
+    if "use_nussinov" in ablation:
+        decoding["use_nussinov"] = bool(ablation.get("use_nussinov", True))
+    if "decode_source" in ablation:
+        decoding["decode_source"] = str(ablation.get("decode_source", decoding.get("decode_source", "pair")))
+    return config
 
 
 def set_seed(seed: int) -> None:
@@ -121,24 +134,83 @@ def build_model(config: Dict[str, Any], tokenizer: RNAOmniTokenizer, device: tor
         dropout=float(model_cfg["dropout"]),
         max_position_embeddings=int(model_cfg["max_position_embeddings"]),
         num_tasks=len(tokenizer.task_to_id),
+        use_pair_head=bool(config.get("ablation", {}).get("use_pair_head", True)),
     )
     return model.to(device)
 
 
-def make_loader(dataset: RNAOmniDataset, tokenizer: RNAOmniTokenizer, config: Dict[str, Any], shuffle: bool) -> DataLoader:
+def make_loader(
+    dataset: RNAOmniDataset | Subset,
+    tokenizer: RNAOmniTokenizer,
+    config: Dict[str, Any],
+    shuffle: bool,
+) -> DataLoader:
     training_cfg = config["training"]
     collator = RNAOmniCollator(
         tokenizer=tokenizer,
         task_ratios=config["tasks"],
         pair_negative_ratio=int(training_cfg.get("pair_negative_ratio", 3)),
         seed=int(training_cfg.get("seed", 42)),
+        ablation=config.get("ablation", {}),
     )
+    if config.get("data", {}).get("length_grouping", False):
+        batch_sampler = LengthGroupedBatchSampler(
+            get_dataset_lengths(dataset),
+            batch_size=int(training_cfg["batch_size"]),
+            bucket_size=int(config.get("data", {}).get("length_bucket_size", 50)),
+            shuffle=shuffle,
+            seed=int(training_cfg.get("seed", 42)),
+        )
+        return DataLoader(
+            dataset,
+            batch_sampler=batch_sampler,
+            collate_fn=collator,
+            num_workers=int(config.get("data", {}).get("num_workers", 0)),
+        )
     return DataLoader(
         dataset,
         batch_size=int(training_cfg["batch_size"]),
         shuffle=shuffle,
         collate_fn=collator,
+        num_workers=int(config.get("data", {}).get("num_workers", 0)),
     )
+
+
+def get_dataset_lengths(dataset: RNAOmniDataset | Subset) -> list[int]:
+    if isinstance(dataset, Subset):
+        return [int(dataset.dataset.samples[idx]["length"]) for idx in dataset.indices]
+    return [int(sample["length"]) for sample in dataset.samples]
+
+
+class LengthGroupedBatchSampler(Sampler[list[int]]):
+    def __init__(self, lengths: Sequence[int], batch_size: int, bucket_size: int, shuffle: bool, seed: int) -> None:
+        self.lengths = list(lengths)
+        self.batch_size = batch_size
+        self.bucket_size = max(1, bucket_size)
+        self.shuffle = shuffle
+        self.seed = seed
+        self.epoch = 0
+
+    def __iter__(self):
+        rng = random.Random(self.seed + self.epoch)
+        indices = list(range(len(self.lengths)))
+        if self.shuffle:
+            rng.shuffle(indices)
+        bucketed = []
+        for start in range(0, len(indices), self.bucket_size):
+            bucket = indices[start : start + self.bucket_size]
+            bucket.sort(key=lambda idx: self.lengths[idx])
+            if self.shuffle:
+                rng.shuffle(bucket)
+            bucketed.extend(bucket)
+        batches = [bucketed[start : start + self.batch_size] for start in range(0, len(bucketed), self.batch_size)]
+        if self.shuffle:
+            rng.shuffle(batches)
+        self.epoch += 1
+        return iter(batches)
+
+    def __len__(self) -> int:
+        return (len(self.lengths) + self.batch_size - 1) // self.batch_size
 
 
 def move_batch_to_device(batch: dict, device: torch.device) -> dict:
@@ -154,72 +226,313 @@ def save_checkpoint(
     tokenizer: RNAOmniTokenizer,
     config: Dict[str, Any],
     epoch: int,
-    val_loss: float,
+    metrics: dict,
+    optimizer: torch.optim.Optimizer | None = None,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+    global_step: int = 0,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "model_state": model.state_dict(),
-            "tokenizer": tokenizer.to_dict(),
-            "config": config,
-            "epoch": epoch,
-            "val_loss": val_loss,
-        },
-        path,
-    )
+    state = {
+        "model_state": model.state_dict(),
+        "tokenizer": tokenizer.to_dict(),
+        "config": config,
+        "epoch": epoch,
+        "metrics": metrics,
+        "global_step": global_step,
+    }
+    if optimizer is not None:
+        state["optimizer_state"] = optimizer.state_dict()
+    if scheduler is not None:
+        state["scheduler_state"] = scheduler.state_dict()
+    torch.save(state, path)
 
 
 def load_checkpoint(ckpt_path: str | Path, device: torch.device) -> tuple[Dict[str, Any], RNAOmniTokenizer, dict]:
+    path = Path(ckpt_path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Checkpoint not found: {path}. Run `python main.py train --config config/config.yaml` first, "
+            "or pass an existing --ckpt path."
+        )
     try:
-        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+        checkpoint = torch.load(path, map_location=device, weights_only=False)
     except TypeError:
-        checkpoint = torch.load(ckpt_path, map_location=device)
-    config = checkpoint["config"]
+        checkpoint = torch.load(path, map_location=device)
+    config = apply_ablation_settings(checkpoint["config"])
     tokenizer = RNAOmniTokenizer.from_dict(checkpoint["tokenizer"])
     return config, tokenizer, checkpoint
+
+
+def forward_model(model: RNAOmniDiffusion, batch: dict) -> dict:
+    return model(
+        input_ids=batch["input_ids"],
+        attention_mask=batch["attention_mask"],
+        segment_ids=batch["segment_ids"],
+        task_ids=batch["task_ids"],
+        time_steps=batch["time_steps"],
+        seq_positions=batch["seq_positions"],
+    )
+
+
+def estimate_loss_options(config: Dict[str, Any], dataset: RNAOmniDataset, tokenizer: RNAOmniTokenizer) -> dict:
+    training = config["training"]
+    token_weights = torch.ones(tokenizer.vocab_size, dtype=torch.float32)
+    struct_counts = {token: 0 for token in tokenizer.structure_tokens}
+    positive_pairs = 0
+    sampled_negatives = 0
+    for sample in dataset.samples:
+        for char in sample["struct"]:
+            if char in struct_counts:
+                struct_counts[char] += 1
+        pair_count = len(sample.get("pairs", []))
+        positive_pairs += pair_count
+        sampled_negatives += max(pair_count * int(training.get("pair_negative_ratio", 3)), int(sample["length"]) if pair_count == 0 else 0)
+
+    if str(training.get("structure_positive_weight", "auto")).lower() == "auto":
+        dot_count = max(1, struct_counts.get(".", 0))
+        bracket_count = max(1, sum(count for token, count in struct_counts.items() if token != "."))
+        bracket_weight = min(10.0, max(1.0, dot_count / bracket_count))
+    else:
+        bracket_weight = float(training.get("structure_positive_weight", 1.0))
+    for token in ["(", ")", "[", "]", "{", "}"]:
+        token_weights[tokenizer.token_id(token)] = float(bracket_weight)
+
+    pair_weight_cfg = str(training.get("pair_positive_weight", "auto")).lower()
+    if pair_weight_cfg == "auto":
+        pair_pos_weight = float(sampled_negatives / max(1, positive_pairs)) if positive_pairs else 1.0
+    else:
+        pair_pos_weight = float(training.get("pair_positive_weight", 1.0))
+
+    return {
+        "lambda_pair": float(training.get("lambda_pair", 0.5)),
+        "lambda_seq": float(training.get("lambda_seq", 1.0)),
+        "lambda_struct": float(training.get("lambda_struct", 1.0)),
+        "token_id_weights": token_weights,
+        "pair_pos_weight": pair_pos_weight,
+        "use_pair_loss": bool(config.get("ablation", {}).get("use_pair_loss", True))
+        and bool(config.get("ablation", {}).get("use_pair_head", True)),
+        "structure_bracket_weight": float(bracket_weight),
+    }
+
+
+def loss_from_batch(outputs: dict, batch: dict, loss_options: dict) -> dict:
+    return compute_omni_loss(
+        outputs,
+        batch,
+        lambda_pair=loss_options["lambda_pair"],
+        lambda_seq=loss_options["lambda_seq"],
+        lambda_struct=loss_options["lambda_struct"],
+        token_id_weights=loss_options["token_id_weights"],
+        pair_pos_weight=loss_options["pair_pos_weight"],
+        use_pair_loss=loss_options["use_pair_loss"],
+    )
+
+
+def update_running(total: dict, loss_dict: dict, batch_size: int) -> None:
+    total["samples"] += batch_size
+    for key in ("loss", "token_loss", "pair_loss"):
+        total[key] += float(loss_dict[key].detach().cpu()) * batch_size
+
+
+def averages(total: dict, prefix: str) -> dict:
+    denom = max(1, total["samples"])
+    return {
+        f"{prefix}_loss": total["loss"] / denom,
+        f"{prefix}_token_loss": total["token_loss"] / denom,
+        f"{prefix}_pair_loss": total["pair_loss"] / denom,
+    }
+
+
+def decode_batch_tokens(tokenizer: RNAOmniTokenizer, logits: torch.Tensor) -> torch.Tensor:
+    return torch.argmax(logits, dim=-1)
+
+
+def collect_pair_diagnostics(outputs: dict, batch: dict, diagnostics: dict) -> None:
+    pair_logits = outputs.get("pair_logits")
+    if pair_logits is None:
+        return
+    pair_logits = pair_logits.detach().float().cpu()
+    pair_labels = batch["pair_labels"].detach().float().cpu()
+    pair_mask = batch["pair_mask"].detach().cpu()
+    lengths = batch["lengths"].detach().cpu().tolist()
+
+    if pair_mask.any():
+        selected_logits = pair_logits[pair_mask]
+        selected_labels = pair_labels[pair_mask]
+        pos = selected_logits[selected_labels > 0.5]
+        neg = selected_logits[selected_labels <= 0.5]
+        if pos.numel():
+            diagnostics["positive_pair_logit_sum"] += float(pos.sum())
+            diagnostics["positive_pair_logit_count"] += int(pos.numel())
+        if neg.numel():
+            diagnostics["negative_pair_logit_sum"] += float(neg.sum())
+            diagnostics["negative_pair_logit_count"] += int(neg.numel())
+
+    for batch_idx, length in enumerate(lengths):
+        if length < 2:
+            continue
+        logits = pair_logits[batch_idx, :length, :length]
+        upper = torch.triu(torch.ones((length, length), dtype=torch.bool), diagonal=1)
+        probs = torch.sigmoid(logits[upper])
+        if probs.numel() == 0:
+            continue
+        diagnostics["pair_prob_sum"] += float(probs.sum())
+        diagnostics["pair_prob_count"] += int(probs.numel())
+        topk = min(10, probs.numel())
+        diagnostics["pair_prob_topk_sum"] += float(torch.topk(probs, k=topk).values.mean())
+        diagnostics["pair_prob_topk_count"] += 1
+
+
+def finalize_pair_diagnostics(diagnostics: dict) -> dict:
+    return {
+        "positive_pair_logit_mean": diagnostics["positive_pair_logit_sum"] / max(1, diagnostics["positive_pair_logit_count"]),
+        "negative_pair_logit_mean": diagnostics["negative_pair_logit_sum"] / max(1, diagnostics["negative_pair_logit_count"]),
+        "pair_prob_mean": diagnostics["pair_prob_sum"] / max(1, diagnostics["pair_prob_count"]),
+        "pair_prob_topk_mean": diagnostics["pair_prob_topk_sum"] / max(1, diagnostics["pair_prob_topk_count"]),
+    }
 
 
 def evaluate_model(
     model: RNAOmniDiffusion,
     loader: DataLoader,
+    samples: Sequence[dict],
+    tokenizer: RNAOmniTokenizer,
     config: Dict[str, Any],
     device: torch.device,
+    loss_options: dict,
     max_batches: int | None = None,
+    decode_structures: bool = True,
 ) -> dict:
     model.eval()
-    losses = []
+    totals = {"samples": 0, "loss": 0.0, "token_loss": 0.0, "pair_loss": 0.0}
+    token_correct = 0
+    token_count = 0
+    pair_diag = {
+        "positive_pair_logit_sum": 0.0,
+        "positive_pair_logit_count": 0,
+        "negative_pair_logit_sum": 0.0,
+        "negative_pair_logit_count": 0,
+        "pair_prob_sum": 0.0,
+        "pair_prob_count": 0,
+        "pair_prob_topk_sum": 0.0,
+        "pair_prob_topk_count": 0,
+    }
+
     with torch.no_grad():
         for batch_idx, batch in enumerate(loader):
             batch = move_batch_to_device(batch, device)
-            outputs = model(
-                input_ids=batch["input_ids"],
-                attention_mask=batch["attention_mask"],
-                segment_ids=batch["segment_ids"],
-                task_ids=batch["task_ids"],
-                time_steps=batch["time_steps"],
-                seq_positions=batch["seq_positions"],
-            )
-            loss_dict = compute_omni_loss(outputs, batch, float(config["training"].get("lambda_pair", 0.5)))
-            losses.append(float(loss_dict["loss"].detach().cpu()))
+            outputs = forward_model(model, batch)
+            loss_dict = loss_from_batch(outputs, batch, loss_options)
+            update_running(totals, loss_dict, int(batch["input_ids"].size(0)))
+
+            labels = batch["labels"]
+            supervised = labels != -100
+            if supervised.any():
+                preds = decode_batch_tokens(tokenizer, outputs["token_logits"])
+                token_correct += int((preds[supervised] == labels[supervised]).sum().detach().cpu())
+                token_count += int(supervised.sum().detach().cpu())
+            collect_pair_diagnostics(outputs, batch, pair_diag)
+
             if max_batches is not None and batch_idx + 1 >= max_batches:
                 break
-    return {"loss": sum(losses) / max(1, len(losses))}
+
+    metrics = averages(totals, "val")
+    metrics["val_token_acc"] = token_correct / max(1, token_count)
+    if decode_structures:
+        seqs = [sample["seq"] for sample in samples]
+        true_structs = [sample["struct"] for sample in samples]
+        pred_structs = [
+            generate_structure_seq2struct(model, tokenizer, seq, config["decoding"], device)
+            for seq in seqs
+        ]
+        struct_metrics = evaluate_structures(
+            pred_structs,
+            true_structs,
+            seqs,
+            allow_wobble=bool(config.get("decoding", {}).get("allow_wobble", True)),
+        )
+        metrics.update({f"val_{key}": value for key, value in struct_metrics.items()})
+    metrics.update(finalize_pair_diagnostics(pair_diag))
+    return metrics
 
 
-def train_model(config: Dict[str, Any], max_steps: int | None = None) -> dict:
+def print_pair_batch_debug(batch: dict) -> None:
+    print("Pair batch debug:")
+    print(f"  raw_seq[0]: {batch['raw_seq'][0]}")
+    print(f"  raw_struct[0]: {batch['raw_struct'][0]}")
+    print(f"  parsed pairs[0]: {batch['raw_pairs'][0]}")
+    print(f"  positive pairs: {int(batch['pair_positive_counts'].sum())}")
+    print(f"  sampled negative pairs: {int(batch['pair_negative_counts'].sum())}")
+    print(f"  seq_positions count[0]: {int((batch['seq_positions'][0] >= 0).sum())}")
+    print(f"  struct_positions count[0]: {int((batch['struct_positions'][0] >= 0).sum())}")
+    print(f"  input_ids shape: {tuple(batch['input_ids'].shape)}")
+    print(f"  pair_labels shape: {tuple(batch['pair_labels'].shape)}")
+
+
+def format_epoch_metrics(metrics: dict) -> str:
+    keys = [
+        "epoch",
+        "train_loss",
+        "train_token_loss",
+        "train_pair_loss",
+        "val_loss",
+        "val_token_acc",
+        "val_pair_precision",
+        "val_pair_recall",
+        "val_pair_f1",
+        "val_valid_structure_rate",
+        "val_canonical_pair_ratio",
+        "val_all_dot_ratio",
+        "learning_rate",
+        "epoch_time",
+    ]
+    parts = []
+    for key in keys:
+        if key not in metrics:
+            continue
+        value = metrics[key]
+        if isinstance(value, float):
+            parts.append(f"{key}={value:.4f}")
+        else:
+            parts.append(f"{key}={value}")
+    return " ".join(parts)
+
+
+def warn_if_collapsed(metrics: dict) -> None:
+    if float(metrics.get("val_all_dot_ratio", 0.0)) > 0.8:
+        print(
+            "Warning: model may collapse to all-dot structures. Check pair loss weight, pair labels, "
+            "Nussinov threshold, or positive/negative pair imbalance."
+        )
+
+
+def train_model(
+    config: Dict[str, Any],
+    max_steps: int | None = None,
+    train_subset: int | None = None,
+) -> dict:
     set_seed(int(config["training"].get("seed", 42)))
     ensure_dataset_paths(config, create_if_missing=True)
     train_dataset, val_dataset, tokenizer = build_datasets_and_tokenizer(config)
+    loss_options = estimate_loss_options(config, train_dataset, tokenizer)
+    if train_subset is not None:
+        train_dataset_for_loader = Subset(train_dataset, list(range(min(train_subset, len(train_dataset)))))
+    else:
+        train_dataset_for_loader = train_dataset
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_model(config, tokenizer, device)
-    train_loader = make_loader(train_dataset, tokenizer, config, shuffle=True)
+    train_loader = make_loader(train_dataset_for_loader, tokenizer, config, shuffle=True)
     val_loader = make_loader(val_dataset, tokenizer, config, shuffle=False)
+
+    if config.get("debug", {}).get("check_pair_batch", False):
+        print_pair_batch_debug(next(iter(train_loader)))
+
     optimizer = AdamW(
         model.parameters(),
         lr=float(config["training"]["lr"]),
         weight_decay=float(config["training"].get("weight_decay", 0.01)),
     )
-    total_steps = max(1, int(config["training"]["epochs"]) * max(1, len(train_loader)))
     warmup_steps = int(config["training"].get("warmup_steps", 0))
 
     def lr_lambda(step: int) -> float:
@@ -228,89 +541,165 @@ def train_model(config: Dict[str, Any], max_steps: int | None = None) -> dict:
         return 1.0
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+    start_epoch = 1
+    global_step = 0
+    resume_path = config["training"].get("resume_from")
+    if resume_path:
+        _, _, checkpoint = load_checkpoint(resume_path, device)
+        model.load_state_dict(checkpoint["model_state"])
+        if "optimizer_state" in checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer_state"])
+        if "scheduler_state" in checkpoint:
+            scheduler.load_state_dict(checkpoint["scheduler_state"])
+        start_epoch = int(checkpoint.get("epoch", 0)) + 1
+        global_step = int(checkpoint.get("global_step", 0))
+        print(f"Resumed training from {resume_path} at epoch {start_epoch}.")
     use_amp = bool(config["training"].get("amp", True)) and device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     output_dir = Path(config["training"]["output_dir"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with (output_dir / "config_used.yaml").open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(config, handle, sort_keys=False)
+    log_path = output_dir / "train_log.jsonl"
     best_path = output_dir / "best.pt"
-    best_val = math.inf
+    last_path = output_dir / "last.pt"
+    if not resume_path and log_path.exists():
+        log_path.unlink()
+    best_score = -math.inf
+    best_metric_name = str(config["training"].get("save_best_by", "val_pair_f1"))
     history = []
-    global_step = 0
+    log_every = int(config["training"].get("log_every", 20))
+    patience = int(config["training"].get("early_stopping_patience", 10))
+    min_delta = float(config["training"].get("min_delta", 0.0001))
+    stale_epochs = 0
+    print(
+        f"loss_weights: lambda_seq={loss_options['lambda_seq']} lambda_struct={loss_options['lambda_struct']} "
+        f"lambda_pair={loss_options['lambda_pair']} structure_bracket_weight={loss_options['structure_bracket_weight']:.3f} "
+        f"pair_pos_weight={loss_options['pair_pos_weight']:.3f} use_pair_loss={loss_options['use_pair_loss']}"
+    )
 
-    for epoch in range(1, int(config["training"]["epochs"]) + 1):
+    for epoch in range(start_epoch, int(config["training"]["epochs"]) + 1):
+        epoch_start = time.time()
         model.train()
+        train_totals = {"samples": 0, "loss": 0.0, "token_loss": 0.0, "pair_loss": 0.0}
         for batch in train_loader:
             batch = move_batch_to_device(batch, device)
             optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast(device_type=device.type, enabled=use_amp):
-                outputs = model(
-                    input_ids=batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
-                    segment_ids=batch["segment_ids"],
-                    task_ids=batch["task_ids"],
-                    time_steps=batch["time_steps"],
-                    seq_positions=batch["seq_positions"],
-                )
-                loss_dict = compute_omni_loss(
-                    outputs,
-                    batch,
-                    lambda_pair=float(config["training"].get("lambda_pair", 0.5)),
-                )
+                outputs = forward_model(model, batch)
+                loss_dict = loss_from_batch(outputs, batch, loss_options)
                 loss = loss_dict["loss"]
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), float(config["training"].get("grad_clip", 1.0)))
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
             global_step += 1
-            record = {
-                "step": global_step,
-                "epoch": epoch,
-                "loss": float(loss.detach().cpu()),
-                "token_loss": float(loss_dict["token_loss"].cpu()),
-                "pair_loss": float(loss_dict["pair_loss"].cpu()),
-            }
-            history.append(record)
-            print(
-                f"step={global_step} epoch={epoch} "
-                f"loss={record['loss']:.4f} token={record['token_loss']:.4f} pair={record['pair_loss']:.4f}"
-            )
+            update_running(train_totals, loss_dict, int(batch["input_ids"].size(0)))
+            if global_step == 1 or global_step % log_every == 0:
+                print(
+                    f"step={global_step} epoch={epoch} "
+                    f"loss={float(loss.detach().cpu()):.4f} "
+                    f"token={float(loss_dict['token_loss'].cpu()):.4f} "
+                    f"pair={float(loss_dict['pair_loss'].cpu()):.4f}"
+                )
             if max_steps is not None and global_step >= max_steps:
                 break
 
-        val_metrics = evaluate_model(model, val_loader, config, device, max_batches=2 if max_steps else None)
-        print(f"epoch={epoch} val_loss={val_metrics['loss']:.4f}")
-        if val_metrics["loss"] < best_val:
-            best_val = val_metrics["loss"]
-            save_checkpoint(best_path, model, tokenizer, config, epoch, best_val)
+        val_eval_samples = val_dataset.samples
+        if max_steps is not None:
+            val_eval_samples = val_eval_samples[: min(32, len(val_eval_samples))]
+        val_metrics = evaluate_model(
+            model,
+            val_loader,
+            val_eval_samples,
+            tokenizer,
+            config,
+            device,
+            loss_options,
+            max_batches=2 if max_steps else None,
+            decode_structures=True,
+        )
+        epoch_metrics = {
+            "epoch": epoch,
+            "step": global_step,
+            **averages(train_totals, "train"),
+            **val_metrics,
+            "learning_rate": float(optimizer.param_groups[0]["lr"]),
+            "epoch_time": time.time() - epoch_start,
+        }
+        history.append(epoch_metrics)
+        print(format_epoch_metrics(epoch_metrics))
+        warn_if_collapsed(epoch_metrics)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(epoch_metrics) + "\n")
+        save_checkpoint(last_path, model, tokenizer, config, epoch, epoch_metrics, optimizer, scheduler, global_step)
+        score = float(epoch_metrics.get(best_metric_name, -math.inf))
+        if score > best_score + min_delta:
+            best_score = score
+            stale_epochs = 0
+            save_checkpoint(best_path, model, tokenizer, config, epoch, epoch_metrics, optimizer, scheduler, global_step)
+        else:
+            stale_epochs += 1
+            if max_steps is None and stale_epochs >= patience:
+                print(f"Early stopping after {stale_epochs} stale epochs on {best_metric_name}.")
+                break
         if max_steps is not None and global_step >= max_steps:
             break
 
-    return {"model": model, "tokenizer": tokenizer, "config": config, "best_path": best_path, "history": history}
+    return {
+        "model": model,
+        "tokenizer": tokenizer,
+        "config": config,
+        "best_path": best_path,
+        "last_path": last_path,
+        "history": history,
+    }
 
 
 def run_train(args: argparse.Namespace) -> None:
     config = load_config(args.config)
-    result = train_model(config)
+    if args.resume:
+        config["training"]["resume_from"] = args.resume
+    result = train_model(config, max_steps=args.max_steps, train_subset=args.train_subset)
     print(f"Best checkpoint: {result['best_path']}")
+    print(f"Last checkpoint: {result['last_path']}")
 
 
 def run_eval(args: argparse.Namespace) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    ckpt_config, tokenizer, checkpoint = load_checkpoint(args.ckpt, device)
-    config = load_config(args.config)
-    config = deep_update(ckpt_config, config)
+    try:
+        ckpt_config, tokenizer, checkpoint = load_checkpoint(args.ckpt, device)
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    user_config = load_config(args.config)
+    config = dict(ckpt_config)
+    config["data"] = user_config.get("data", config.get("data", {}))
+    config["decoding"] = deep_update(config.get("decoding", {}), user_config.get("decoding", {}))
     val_dataset = RNAOmniDataset(config["data"]["val_jsonl"], max_length=int(config["data"]["max_length"]))
     model = build_model(config, tokenizer, device)
     model.load_state_dict(checkpoint["model_state"])
     loader = make_loader(val_dataset, tokenizer, config, shuffle=False)
-    metrics = evaluate_model(model, loader, config, device)
-    print(f"eval_loss={metrics['loss']:.4f}")
+    loss_options = estimate_loss_options(config, val_dataset, tokenizer)
+    metrics = evaluate_model(model, loader, val_dataset.samples, tokenizer, config, device, loss_options)
+    for key in sorted(metrics):
+        value = metrics[key]
+        if isinstance(value, float):
+            print(f"{key}={value:.6f}")
+        else:
+            print(f"{key}={value}")
+    warn_if_collapsed(metrics)
 
 
 def run_infer(args: argparse.Namespace) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    config, tokenizer, checkpoint = load_checkpoint(args.ckpt, device)
+    try:
+        config, tokenizer, checkpoint = load_checkpoint(args.ckpt, device)
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
     model = build_model(config, tokenizer, device)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
@@ -333,7 +722,7 @@ def run_smoke(args: argparse.Namespace) -> None:
     config = deep_update(
         config,
         {
-            "data": {"max_length": 64},
+            "data": {"max_length": 64, "num_workers": 0},
             "model": {
                 "hidden_size": 64,
                 "num_layers": 2,
@@ -349,8 +738,9 @@ def run_smoke(args: argparse.Namespace) -> None:
                 "amp": False,
                 "output_dir": "outputs/smoke",
                 "seed": 42,
+                "log_every": 1,
             },
-            "decoding": {"num_steps": 4, "use_nussinov": True},
+            "decoding": {"num_steps": 4, "use_nussinov": True, "decode_source": "pair"},
         },
     )
     create_tiny_jsonl_dataset(config, overwrite=False)
@@ -362,7 +752,7 @@ def run_smoke(args: argparse.Namespace) -> None:
     seq = synthetic_samples()[0]["seq"]
     pred_struct = generate_structure_seq2struct(model, tokenizer, seq, config["decoding"], device)
     true_struct = synthetic_samples()[0]["struct"]
-    print(f"smoke_losses={[round(item['loss'], 4) for item in result['history']]}")
+    print(f"smoke_losses={[round(item['train_loss'], 4) for item in result['history']]}")
     print(f"seq={seq}")
     print(f"pred_struct={pred_struct}")
     print(f"bp_f1_vs_toy={base_pair_f1(pred_struct, true_struct):.4f}")
@@ -375,6 +765,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     train = subparsers.add_parser("train")
     train.add_argument("--config", default="config/config.yaml")
+    train.add_argument("--resume")
+    train.add_argument("--max_steps", type=int)
+    train.add_argument("--train_subset", type=int)
     train.set_defaults(func=run_train)
 
     eval_parser = subparsers.add_parser("eval")

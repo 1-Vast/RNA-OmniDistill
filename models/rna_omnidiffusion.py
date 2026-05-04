@@ -20,10 +20,12 @@ class RNAOmniDiffusion(nn.Module):
         max_position_embeddings: int = 2048,
         num_segments: int = 4,
         num_tasks: int = 5,
+        use_pair_head: bool = True,
     ) -> None:
         super().__init__()
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
+        self.use_pair_head = use_pair_head
         self.token_embedding = nn.Embedding(vocab_size, hidden_size)
         self.position_embedding = nn.Embedding(max_position_embeddings, hidden_size)
         self.segment_embedding = nn.Embedding(num_segments, hidden_size)
@@ -47,9 +49,10 @@ class RNAOmniDiffusion(nn.Module):
         self.sequence_head = nn.Linear(hidden_size, vocab_size)
         self.structure_head = nn.Linear(hidden_size, vocab_size)
         self.general_head = nn.Linear(hidden_size, vocab_size)
-        self.pair_left = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.pair_right = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.pair_bias = nn.Parameter(torch.zeros(1))
+        if self.use_pair_head:
+            self.pair_left = nn.Linear(hidden_size, hidden_size, bias=False)
+            self.pair_right = nn.Linear(hidden_size, hidden_size, bias=False)
+            self.pair_bias = nn.Parameter(torch.zeros(1))
 
     def forward(
         self,
@@ -88,7 +91,7 @@ class RNAOmniDiffusion(nn.Module):
         token_logits = torch.where((segment_ids == 2).unsqueeze(-1), structure_logits, token_logits)
 
         pair_logits = None
-        if seq_positions is not None:
+        if self.use_pair_head and seq_positions is not None:
             pair_logits = self._pair_logits(encoded, seq_positions)
 
         return {
@@ -121,22 +124,46 @@ def compute_omni_loss(
     outputs: Dict[str, torch.Tensor | None],
     batch: dict,
     lambda_pair: float = 0.5,
+    lambda_seq: float = 1.0,
+    lambda_struct: float = 1.0,
+    token_id_weights: torch.Tensor | None = None,
+    pair_pos_weight: torch.Tensor | float | None = None,
+    use_pair_loss: bool = True,
 ) -> Dict[str, torch.Tensor]:
     token_logits = outputs["token_logits"]
     labels = batch["labels"].to(token_logits.device)
-    token_loss = F.cross_entropy(
-        token_logits.view(-1, token_logits.size(-1)),
-        labels.view(-1),
-        ignore_index=-100,
-    )
+    flat_logits = token_logits.view(-1, token_logits.size(-1))
+    flat_labels = labels.view(-1)
+    per_token = F.cross_entropy(flat_logits, flat_labels, ignore_index=-100, reduction="none")
+    supervised = flat_labels != -100
+    flat_segments = batch["segment_ids"].to(token_logits.device).view(-1)
+    segment_weights = torch.zeros_like(per_token)
+    segment_weights = torch.where(flat_segments == 1, per_token.new_tensor(float(lambda_seq)), segment_weights)
+    segment_weights = torch.where(flat_segments == 2, per_token.new_tensor(float(lambda_struct)), segment_weights)
+    if token_id_weights is not None:
+        id_weights = token_id_weights.to(token_logits.device).float()
+        label_weights = torch.ones_like(per_token)
+        safe_labels = flat_labels.clamp_min(0)
+        label_weights[supervised] = id_weights[safe_labels[supervised]]
+        segment_weights = segment_weights * label_weights
+    weighted = per_token * segment_weights
+    denom = segment_weights[supervised].sum().clamp_min(1.0)
+    token_loss = weighted[supervised].sum() / denom
 
     pair_logits = outputs.get("pair_logits")
     pair_loss = token_loss.new_zeros(())
     pair_mask = batch["pair_mask"].to(token_logits.device)
-    if pair_logits is not None and pair_mask.any():
-        pair_labels = batch["pair_labels"].to(token_logits.device)
-        pair_loss = F.binary_cross_entropy_with_logits(pair_logits[pair_mask], pair_labels[pair_mask])
+    positive_count = int(batch.get("pair_positive_counts", pair_mask.new_zeros(1)).sum().item())
+    if use_pair_loss and pair_logits is not None and pair_mask.any() and positive_count > 0:
+        pair_labels = batch["pair_labels"].to(token_logits.device).float()
+        pos_weight = None
+        if pair_pos_weight is not None:
+            pos_weight = torch.as_tensor(pair_pos_weight, dtype=torch.float32, device=token_logits.device)
+        pair_loss = F.binary_cross_entropy_with_logits(
+            pair_logits.float()[pair_mask],
+            pair_labels[pair_mask],
+            pos_weight=pos_weight,
+        )
 
     total = token_loss + float(lambda_pair) * pair_loss
     return {"loss": total, "token_loss": token_loss.detach(), "pair_loss": pair_loss.detach()}
-

@@ -1,0 +1,6 @@
+training:
+  output_dir: outputs/ablations/no_motif_family_condition
+ablation:
+  use_motif_condition: false
+  use_family_condition: false
+

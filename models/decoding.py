@@ -113,29 +113,62 @@ def entropy_iterative_unmask(
 
 def nussinov_decode(
     seq: str,
-    pair_probs: torch.Tensor | Sequence[Sequence[float]],
+    pair_scores: torch.Tensor | Sequence[Sequence[float]],
     min_loop_length: int = 3,
     allow_wobble: bool = True,
-    min_pair_prob: float = 0.5,
+    pair_threshold: float = 0.5,
+    nussinov_gamma: float = 1.0,
+    token_pair_compatibility: torch.Tensor | None = None,
+    token_alpha: float = 0.25,
+    input_is_logit: bool = False,
 ) -> str:
-    """Decode a non-pseudoknotted dot-bracket structure from pair probabilities."""
-    if isinstance(pair_probs, torch.Tensor):
-        probs = pair_probs.detach().float().cpu()
+    """Decode a non-pseudoknotted dot-bracket structure from pair logits/probabilities.
+
+    The DP score is continuous rather than a hard probability cutoff. A small
+    top-candidate floor prevents early, poorly calibrated checkpoints from
+    always decoding to all-dot structures solely because every probability is
+    below the nominal threshold.
+    """
+    if isinstance(pair_scores, torch.Tensor):
+        raw_scores = pair_scores.detach().float().cpu()
     else:
-        probs = torch.tensor(pair_probs, dtype=torch.float32)
+        raw_scores = torch.tensor(pair_scores, dtype=torch.float32)
     length = len(seq)
     if length == 0:
         return ""
+    if input_is_logit:
+        logits = raw_scores
+    else:
+        probs = raw_scores.clamp(1e-6, 1.0 - 1e-6)
+        logits = torch.logit(probs)
+    threshold_logit = torch.logit(torch.tensor(float(pair_threshold)).clamp(1e-6, 1.0 - 1e-6))
+    score_matrix = float(nussinov_gamma) * (logits - threshold_logit)
+    if token_pair_compatibility is not None:
+        score_matrix = score_matrix + float(token_alpha) * token_pair_compatibility.detach().float().cpu()
+
+    valid_candidates: List[tuple[float, int, int]] = []
+    for i in range(length):
+        for j in range(i + 1, length):
+            if j - i < min_loop_length:
+                continue
+            if seq[i] != "N" and seq[j] != "N" and not canonical_pair(seq[i], seq[j], allow_wobble):
+                continue
+            valid_candidates.append((float(score_matrix[i, j]), i, j))
+    valid_candidates.sort(reverse=True)
+    topk = max(1, min(len(valid_candidates), length // 2 if length > 1 else 1))
+    for rank, (_, i, j) in enumerate(valid_candidates[:topk]):
+        if score_matrix[i, j] <= 0:
+            score_matrix[i, j] = 0.05 * (topk - rank) / topk
+
     dp = torch.zeros((length, length), dtype=torch.float32)
     choice: Dict[Tuple[int, int], tuple] = {}
 
     def pair_score(i: int, j: int) -> float:
-        if j - i <= min_loop_length:
+        if j - i < min_loop_length:
             return -1e6
         if seq[i] != "N" and seq[j] != "N" and not canonical_pair(seq[i], seq[j], allow_wobble):
             return -1e6
-        prob = float(probs[i, j])
-        return prob - min_pair_prob
+        return float(score_matrix[i, j])
 
     for span in range(1, length):
         for i in range(0, length - span):
@@ -202,16 +235,38 @@ def generate_structure_seq2struct(
     )
     batch["input_ids"] = input_ids
     outputs = _forward_model(model, batch)
-    if decoding_config.get("use_nussinov", True) and outputs["pair_logits"] is not None:
-        pair_probs = torch.sigmoid(outputs["pair_logits"][0, : len(seq), : len(seq)])
+    ids = input_ids[0, struct_positions].tolist()
+    token_struct = "".join(tokenizer.decode(ids))
+    decode_source = str(decoding_config.get("decode_source", "pair")).lower()
+    if decode_source == "token" or not decoding_config.get("use_nussinov", True):
+        return token_struct
+    if outputs["pair_logits"] is not None:
+        pair_logits = outputs["pair_logits"][0, : len(seq), : len(seq)]
+        compatibility = None
+        if decode_source == "hybrid":
+            compatibility = token_pair_compatibility(token_struct)
         return nussinov_decode(
             seq,
-            pair_probs,
+            pair_logits,
             min_loop_length=int(decoding_config.get("min_loop_length", 3)),
             allow_wobble=bool(decoding_config.get("allow_wobble", True)),
+            pair_threshold=float(decoding_config.get("pair_threshold", 0.5)),
+            nussinov_gamma=float(decoding_config.get("nussinov_gamma", 1.0)),
+            token_pair_compatibility=compatibility,
+            input_is_logit=True,
         )
-    ids = input_ids[0, struct_positions].tolist()
-    return "".join(tokenizer.decode(ids))
+    return token_struct
+
+
+def token_pair_compatibility(struct: str) -> torch.Tensor:
+    matrix = torch.zeros((len(struct), len(struct)), dtype=torch.float32)
+    for i, left in enumerate(struct):
+        if left not in "([{":
+            continue
+        for j in range(i + 1, len(struct)):
+            if struct[j] in ")]}":
+                matrix[i, j] = 1.0
+    return matrix
 
 
 @torch.no_grad()

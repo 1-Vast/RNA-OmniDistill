@@ -1,0 +1,9 @@
+training:
+  output_dir: outputs/ablations/pair_decode
+ablation:
+  use_nussinov: true
+  decode_source: pair
+decoding:
+  use_nussinov: true
+  decode_source: pair
+

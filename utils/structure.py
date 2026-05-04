@@ -74,6 +74,16 @@ def pairs_to_dot_bracket(pairs: Iterable[Sequence[int]], length: int) -> str:
     return "".join(chars)
 
 
+def has_pseudoknot(pairs: Iterable[Sequence[int]]) -> bool:
+    """Return True when any two pairs cross: i < k < j < l."""
+    normalized = sorted((min(int(i), int(j)), max(int(i), int(j))) for i, j in pairs)
+    for idx, (i, j) in enumerate(normalized):
+        for k, l in normalized[idx + 1 :]:
+            if i < k < j < l:
+                return True
+    return False
+
+
 def validate_structure(seq: str, struct: str, allow_wobble: bool = True) -> bool:
     """Validate length, bracket balance, one-pair-per-position, and pair chemistry."""
     if len(seq) != len(struct):
@@ -132,4 +142,3 @@ def infer_simple_motifs(
 
     motifs.sort(key=lambda item: (int(item["start"]), int(item["end"])))
     return motifs
-

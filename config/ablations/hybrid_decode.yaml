@@ -1,0 +1,9 @@
+training:
+  output_dir: outputs/ablations/hybrid_decode
+ablation:
+  use_nussinov: true
+  decode_source: hybrid
+decoding:
+  use_nussinov: true
+  decode_source: hybrid
+

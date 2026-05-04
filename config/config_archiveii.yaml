@@ -1,7 +1,7 @@
 data:
-  train_jsonl: dataset/processed/train.jsonl
-  val_jsonl: dataset/processed/val.jsonl
-  test_jsonl: dataset/processed/test.jsonl
+  train_jsonl: dataset/processed_archiveii/train.jsonl
+  val_jsonl: dataset/processed_archiveii/val.jsonl
+  test_jsonl: dataset/processed_archiveii/test.jsonl
   max_length: 512
   num_workers: 0
   deduplicate: true
@@ -37,7 +37,7 @@ training:
   grad_clip: 1.0
   amp: true
   seed: 42
-  output_dir: outputs/rna_omnidiffusion_v2
+  output_dir: outputs/archiveii_full
   save_best_by: val_pair_f1
   early_stopping_patience: 10
   min_delta: 0.0001
@@ -72,3 +72,4 @@ baselines:
 
 debug:
   check_pair_batch: false
+

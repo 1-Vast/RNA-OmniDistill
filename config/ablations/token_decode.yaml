@@ -1,0 +1,8 @@
+training:
+  output_dir: outputs/ablations/token_decode
+ablation:
+  decode_source: token
+decoding:
+  use_nussinov: false
+  decode_source: token
+
