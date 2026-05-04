@@ -1,0 +1,2 @@
+{"id": "toy_0001", "seq": "GCAUAGC", "struct": "((...))", "family": "miRNA", "motifs": [{"type": "STEM", "start": 0, "end": 6}, {"type": "HAIRPIN", "start": 2, "end": 4}]}
+{"id": "toy_0002", "seq": "GGGAAACCC", "struct": "(((...)))", "family": "riboswitch", "motifs": [{"type": "STEM", "start": 0, "end": 8}, {"type": "HAIRPIN", "start": 3, "end": 5}]}

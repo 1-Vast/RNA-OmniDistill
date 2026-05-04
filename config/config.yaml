@@ -1,0 +1,37 @@
+data:
+  train_jsonl: dataset/processed/train.jsonl
+  val_jsonl: dataset/processed/val.jsonl
+  test_jsonl: dataset/processed/test.jsonl
+  max_length: 512
+
+tasks:
+  seq2struct: 0.35
+  invfold: 0.25
+  inpaint: 0.25
+  motif_control: 0.15
+
+model:
+  hidden_size: 512
+  num_layers: 8
+  num_heads: 8
+  dropout: 0.1
+  max_position_embeddings: 2048
+
+training:
+  batch_size: 8
+  epochs: 5
+  lr: 0.0001
+  weight_decay: 0.01
+  warmup_steps: 500
+  lambda_pair: 0.5
+  pair_negative_ratio: 3
+  amp: true
+  seed: 42
+  output_dir: outputs/rna_omnidiffusion_v2
+
+decoding:
+  num_steps: 32
+  min_loop_length: 3
+  use_nussinov: true
+  allow_wobble: true
+
