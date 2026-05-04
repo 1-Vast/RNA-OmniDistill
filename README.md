@@ -4,6 +4,8 @@ Minimal, runnable masked discrete diffusion for unified RNA sequence, secondary-
 
 The first target is a smoke-testable training pipeline, not SOTA performance. This version uses a small Transformer encoder trained from scratch and does not include RNA-FM, LoRA, semantic cache, external LLM calls, ligand/protein tasks, or RNA 3D tasks.
 
+See `INDEX.md` for a file-by-file repository guide.
+
 ## Data Format
 
 Use JSONL files under `dataset/processed/`. Each line should contain:
