@@ -456,6 +456,26 @@ def run_potential(args: argparse.Namespace) -> None:
         steps[1][1].append("--resume")
     if args.bench_batch:
         steps[1][1].extend(["--batch", str(args.bench_batch)])
+    if args.stage_logits:
+        steps[1][1].append("--stage_logits")
+    if args.decode_only:
+        steps[1][1].append("--decode_only")
+    if args.logits_file:
+        steps[1][1].extend(["--logits_file", args.logits_file])
+    if args.bench_workers is not None:
+        steps[1][1].extend(["--workers", str(args.bench_workers)])
+    if args.bench_chunksize is not None:
+        steps[1][1].extend(["--chunksize", str(args.bench_chunksize)])
+    if args.threshold is not None:
+        steps[1][1].extend(["--threshold", str(args.threshold)])
+    if args.gamma is not None:
+        steps[1][1].extend(["--gamma", str(args.gamma)])
+    if args.source:
+        steps[1][1].extend(["--source", args.source])
+    if args.token_alpha is not None:
+        steps[1][1].extend(["--token_alpha", str(args.token_alpha)])
+    if args.scan:
+        steps[1][1].extend(["--scan", args.scan])
     for name, cmd in steps:
         log_path = logs / f"{name}.log"
         code = run_logged(cmd, log_path)
@@ -506,6 +526,16 @@ def main() -> None:
     potential.add_argument("--bench_profile", action="store_true")
     potential.add_argument("--bench_resume", action="store_true")
     potential.add_argument("--bench_batch", type=int)
+    potential.add_argument("--stage_logits", action="store_true")
+    potential.add_argument("--decode_only", action="store_true")
+    potential.add_argument("--logits_file")
+    potential.add_argument("--bench_workers", type=int)
+    potential.add_argument("--bench_chunksize", type=int)
+    potential.add_argument("--threshold", type=float)
+    potential.add_argument("--gamma", type=float)
+    potential.add_argument("--source", choices=["pair", "hybrid"])
+    potential.add_argument("--token_alpha", type=float)
+    potential.add_argument("--scan")
     potential.set_defaults(func=run_potential)
     ablate = sub.add_parser("ablate")
     ablate.add_argument("--config", default="config/archive.yaml")

@@ -10,18 +10,19 @@
 - `config/mild.yaml`, `config/strict.yaml`, `config/stable.yaml`: post-full intervention templates.
 - `config/relaxed.yaml`, `config/pairfix.yaml`, `config/strong.yaml`: legacy sweep configs.
 - `config/cpu.yaml`: small CPU preflight configuration.
+- `config/scan.json`: decode-only strict Nussinov threshold/gamma scan grid.
 - `config/ablate/`: compact ablation patches.
 - `data/dataset.py`: JSONL dataset.
 - `data/collator.py`: task sampling, masking, and pair labels.
 - `data/token.py`: RNA tokenizer.
 - `models/omni.py`: Transformer model, pair head, and loss.
 - `models/mask.py`: masking helpers.
-- `models/decode.py`: iterative decoding and Nussinov decoding.
+- `models/decode.py`: iterative decoding, strict Nussinov decoding, and decode helpers.
 - `models/decode.py`: also includes GPU batched greedy pair decoding for fast benchmark checks.
 - `utils/struct.py`: dot-bracket and motif utilities.
 - `utils/metric.py`: token and pair metrics.
 - `scripts/data.py`: fetch, prep, check, split.
 - `scripts/probe.py`: smoke, overfit, real-data probes.
 - `scripts/audit.py`: name, alignment, and runtime audits.
-- `scripts/eval.py`: benchmark, export, analyze, diagnose, compare; benchmark supports strict Nussinov and fast greedy decoding.
-- `scripts/run.py`: potential, ablate, and sweep workflows.
+- `scripts/eval.py`: benchmark, export, analyze, diagnose, compare; benchmark supports strict Nussinov, staged logits, multiprocessing decode, decode-only scans, and fast greedy probing.
+- `scripts/run.py`: potential, ablate, and sweep workflows with benchmark decode argument passthrough.

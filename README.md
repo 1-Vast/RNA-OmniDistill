@@ -79,6 +79,8 @@ python scripts/audit.py profile --config config/archive.yaml --steps 10 --device
 python scripts/eval.py bench --config config/archive.yaml --ckpt outputs/archive/best.pt --split test --device cuda
 python scripts/eval.py bench --config config/fixed.yaml --ckpt outputs/fixed/best.pt --split test --device cuda --decode greedy --profile --resume
 python scripts/eval.py bench --config config/fixed.yaml --ckpt outputs/fixed/best.pt --split test --device cuda --decode nussinov --limit 8 --profile
+python scripts/eval.py bench --config config/fixed.yaml --ckpt outputs/fixed/best.pt --split test --device cuda --decode nussinov --stage_logits --workers 8 --chunksize 2 --profile
+python scripts/eval.py bench --config config/fixed.yaml --ckpt outputs/fixed/best.pt --split test --device cuda --decode nussinov --decode_only --workers 8 --chunksize 2 --profile --scan config/scan.json
 python scripts/eval.py export --config config/archive.yaml --ckpt outputs/archive/best.pt --input dataset/archive/test.jsonl --out outputs/archive/pred.jsonl --device cuda
 python scripts/eval.py analyze --log outputs/archive/trainlog.jsonl --out outputs/archive/analysis.json
 python scripts/eval.py diagnose --pred outputs/archive/predictions.jsonl --out outputs/archive/diagnosis.json
@@ -141,6 +143,8 @@ Benchmark decoding:
 - `--decode greedy` is a fast GPU batched path for checking whether the pair head carries structural signal.
 - Greedy decoding is approximate. It may create crossing pairs before dot-bracket conversion; crossing pairs are skipped when exporting dot-bracket structures and counted in `benchmark.json`.
 - Final paper reporting should still include strict Nussinov results when feasible.
+- Strict Nussinov benchmark supports staged GPU logits with `--stage_logits`, CPU multiprocessing with `--workers`, and decode-only rescoring with `--decode_only`.
+- Decode-only threshold/gamma scans reuse `outputs/<run>/logits.pt` via `--scan config/scan.json`; they do not retrain or modify benchmark labels.
 
 ## Current Limitations
 

@@ -3,6 +3,7 @@
 import math
 from typing import Dict, Iterable, List, Sequence, Tuple
 
+import numpy as np
 import torch
 
 from data.token import RNAOmniTokenizer
@@ -135,30 +136,39 @@ def nussinov_decode(
     always decoding to all-dot structures solely because every probability is
     below the nominal threshold.
     """
-    if isinstance(pair_scores, torch.Tensor):
-        raw_scores = pair_scores.detach().float().cpu()
-    else:
-        raw_scores = torch.tensor(pair_scores, dtype=torch.float32)
     length = len(seq)
     if length == 0:
         return ""
+    if isinstance(pair_scores, torch.Tensor):
+        raw_scores = pair_scores.detach().float().cpu().numpy()
+    else:
+        raw_scores = np.asarray(pair_scores, dtype=np.float32)
+    raw_scores = raw_scores[:length, :length].astype(np.float32, copy=False)
     if input_is_logit:
         logits = raw_scores
     else:
-        probs = raw_scores.clamp(1e-6, 1.0 - 1e-6)
-        logits = torch.logit(probs)
-    threshold_logit = torch.logit(torch.tensor(float(pair_threshold)).clamp(1e-6, 1.0 - 1e-6))
+        probs = np.clip(raw_scores, 1e-6, 1.0 - 1e-6)
+        logits = np.log(probs / (1.0 - probs))
+    threshold = min(max(float(pair_threshold), 1e-6), 1.0 - 1e-6)
+    threshold_logit = math.log(threshold / (1.0 - threshold))
     score_matrix = float(nussinov_gamma) * (logits - threshold_logit)
     if token_pair_compatibility is not None:
-        score_matrix = score_matrix + float(token_alpha) * token_pair_compatibility.detach().float().cpu()
+        if isinstance(token_pair_compatibility, torch.Tensor):
+            prior = token_pair_compatibility.detach().float().cpu().numpy()
+        else:
+            prior = np.asarray(token_pair_compatibility, dtype=np.float32)
+        score_matrix = score_matrix + float(token_alpha) * prior[:length, :length]
 
-    valid_candidates: List[tuple[float, int, int]] = []
+    valid_mask = np.zeros((length, length), dtype=bool)
     for i in range(length):
-        for j in range(i + 1, length):
-            if j - i < min_loop_length:
-                continue
+        for j in range(i + max(1, int(min_loop_length)), length):
             if seq[i] != "N" and seq[j] != "N" and not canonical_pair(seq[i], seq[j], allow_wobble):
                 continue
+            valid_mask[i, j] = True
+
+    valid_candidates: List[tuple[float, int, int]] = []
+    valid_i, valid_j = np.nonzero(valid_mask)
+    for i, j in zip(valid_i.tolist(), valid_j.tolist()):
             valid_candidates.append((float(score_matrix[i, j]), i, j))
     valid_candidates.sort(reverse=True)
     topk = max(1, min(len(valid_candidates), length // 2 if length > 1 else 1))
@@ -166,35 +176,31 @@ def nussinov_decode(
         if score_matrix[i, j] <= 0:
             score_matrix[i, j] = 0.05 * (topk - rank) / topk
 
-    dp = torch.zeros((length, length), dtype=torch.float32)
+    dp = np.zeros((length, length), dtype=np.float32)
     choice: Dict[Tuple[int, int], tuple] = {}
-
-    def pair_score(i: int, j: int) -> float:
-        if j - i < min_loop_length:
-            return -1e6
-        if seq[i] != "N" and seq[j] != "N" and not canonical_pair(seq[i], seq[j], allow_wobble):
-            return -1e6
-        return float(score_matrix[i, j])
 
     for span in range(1, length):
         for i in range(0, length - span):
             j = i + span
-            best = dp[i + 1, j] if i + 1 <= j else torch.tensor(0.0)
+            best = float(dp[i + 1, j]) if i + 1 <= j else 0.0
             choice[(i, j)] = ("skip_i",)
             if dp[i, j - 1] > best:
-                best = dp[i, j - 1]
+                best = float(dp[i, j - 1])
                 choice[(i, j)] = ("skip_j",)
-            score = pair_score(i, j)
-            if score > -1e5:
-                paired = (dp[i + 1, j - 1] if i + 1 <= j - 1 else torch.tensor(0.0)) + score
+            if valid_mask[i, j]:
+                score = float(score_matrix[i, j])
+                paired = (float(dp[i + 1, j - 1]) if i + 1 <= j - 1 else 0.0) + score
                 if paired > best:
                     best = paired
                     choice[(i, j)] = ("pair", i, j)
-            for k in range(i + 1, j):
-                split = dp[i, k] + dp[k + 1, j]
-                if split > best:
-                    best = split
-                    choice[(i, j)] = ("split", k)
+            if j - i > 1:
+                split_scores = dp[i, i + 1 : j] + dp[i + 2 : j + 1, j]
+                if split_scores.size:
+                    offset = int(np.argmax(split_scores))
+                    split = float(split_scores[offset])
+                    if split > best:
+                        best = split
+                        choice[(i, j)] = ("split", i + 1 + offset)
             dp[i, j] = best
 
     pairs: List[tuple[int, int]] = []
