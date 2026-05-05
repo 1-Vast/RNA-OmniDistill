@@ -77,6 +77,8 @@ python scripts/audit.py profile --config config/archive.yaml --steps 10 --device
 
 ```powershell
 python scripts/eval.py bench --config config/archive.yaml --ckpt outputs/archive/best.pt --split test --device cuda
+python scripts/eval.py bench --config config/fixed.yaml --ckpt outputs/fixed/best.pt --split test --device cuda --decode greedy --profile --resume
+python scripts/eval.py bench --config config/fixed.yaml --ckpt outputs/fixed/best.pt --split test --device cuda --decode nussinov --limit 8 --profile
 python scripts/eval.py export --config config/archive.yaml --ckpt outputs/archive/best.pt --input dataset/archive/test.jsonl --out outputs/archive/pred.jsonl --device cuda
 python scripts/eval.py analyze --log outputs/archive/trainlog.jsonl --out outputs/archive/analysis.json
 python scripts/eval.py diagnose --pred outputs/archive/predictions.jsonl --out outputs/archive/diagnosis.json
@@ -101,6 +103,7 @@ ArchiveII full decision workflow:
 
 ```powershell
 python scripts/run.py potential --config config/fixed.yaml --mode full --device cuda
+python scripts/run.py potential --config config/fixed.yaml --mode full --device cuda --decode greedy --bench_profile --bench_resume
 ```
 
 Configuration semantics:
@@ -131,6 +134,13 @@ conda run -n DL python scripts\run.py ablate --config config/fixed.yaml --only f
 ```
 
 Agent integration remains deferred. These scripts only train, evaluate, diagnose, and recommend safe next configurations.
+
+Benchmark decoding:
+
+- `--decode nussinov` is the strict non-crossing path and remains the default.
+- `--decode greedy` is a fast GPU batched path for checking whether the pair head carries structural signal.
+- Greedy decoding is approximate. It may create crossing pairs before dot-bracket conversion; crossing pairs are skipped when exporting dot-bracket structures and counted in `benchmark.json`.
+- Final paper reporting should still include strict Nussinov results when feasible.
 
 ## Current Limitations
 

@@ -9,6 +9,12 @@ from data.token import RNAOmniTokenizer
 from utils.struct import canonical_pair, parse_dot_bracket, pairs_to_dot_bracket
 
 
+GREEDY_DECODE_WARNING = (
+    "Greedy decoding is approximate and may allow pseudoknot-like crossing pairs "
+    "before dot-bracket conversion. Use Nussinov for strict non-crossing decoding."
+)
+
+
 def _forward_model(model: torch.nn.Module, batch: dict) -> dict:
     return model(
         input_ids=batch["input_ids"],
@@ -211,6 +217,131 @@ def nussinov_decode(
 
     backtrack(0, length - 1)
     return pairs_to_dot_bracket(pairs, length)
+
+
+def _canonical_mask_for_batch(
+    seqs: Sequence[str],
+    max_len: int,
+    device: torch.device,
+    allow_wobble: bool,
+) -> torch.Tensor:
+    code = {"A": 0, "U": 1, "G": 2, "C": 3, "N": 4}
+    encoded = torch.full((len(seqs), max_len), 4, dtype=torch.long, device=device)
+    for batch_idx, seq in enumerate(seqs):
+        values = [code.get(base, 4) for base in seq.upper().replace("T", "U")]
+        if values:
+            encoded[batch_idx, : len(values)] = torch.tensor(values, dtype=torch.long, device=device)
+    allowed = torch.zeros((5, 5), dtype=torch.bool, device=device)
+    for left, right in [("A", "U"), ("U", "A"), ("G", "C"), ("C", "G")]:
+        allowed[code[left], code[right]] = True
+    if allow_wobble:
+        allowed[code["G"], code["U"]] = True
+        allowed[code["U"], code["G"]] = True
+    left = encoded.unsqueeze(2).expand(-1, -1, max_len)
+    right = encoded.unsqueeze(1).expand(-1, max_len, -1)
+    return allowed[left, right]
+
+
+@torch.no_grad()
+def batched_greedy_decode_gpu(
+    pair_logits: torch.Tensor,
+    seqs: list[str] | None = None,
+    min_loop_length: int = 3,
+    pair_threshold: float = 0.25,
+    allow_wobble: bool = True,
+    canonical_only: bool = True,
+    max_pairs: int | None = None,
+    prevent_crossing: bool = False,
+) -> torch.Tensor:
+    """Fast greedy base-pair decoding from batched pair logits.
+
+    This is an approximate benchmark path. It avoids CPU Nussinov DP and keeps
+    the score filtering on tensors, then runs a small greedy selection loop over
+    top candidates per sample.
+    """
+    if pair_logits.ndim != 3:
+        raise ValueError(f"pair_logits must have shape (B, L, L), got {tuple(pair_logits.shape)}")
+    device = pair_logits.device
+    batch_size, max_len, _ = pair_logits.shape
+    lengths = [max_len] * batch_size if seqs is None else [len(seq) for seq in seqs]
+    idx = torch.arange(max_len, device=device)
+    length_tensor = torch.tensor(lengths, dtype=torch.long, device=device)
+    valid_len = idx.unsqueeze(0) < length_tensor.unsqueeze(1)
+    valid = valid_len.unsqueeze(1) & valid_len.unsqueeze(2)
+    valid = valid & (idx.view(1, 1, max_len) > idx.view(1, max_len, 1))
+    if min_loop_length > 0:
+        valid = valid & ((idx.view(1, 1, max_len) - idx.view(1, max_len, 1)) >= int(min_loop_length))
+    if canonical_only and seqs is not None:
+        valid = valid & _canonical_mask_for_batch(seqs, max_len, device, allow_wobble)
+
+    probs = pair_logits.float().sigmoid().masked_fill(~valid, -1.0)
+    threshold = float(pair_threshold)
+    flat = probs.flatten(1)
+    default_max_pairs = max(1, max_len // 2)
+    pair_limit = int(max_pairs or default_max_pairs)
+    candidate_count = min(flat.size(1), max(pair_limit * 20, pair_limit))
+    values, indices = torch.topk(flat, k=candidate_count, dim=1)
+    pred = torch.zeros_like(probs, dtype=torch.bool)
+
+    for batch_idx in range(batch_size):
+        used: set[int] = set()
+        selected: list[tuple[int, int]] = []
+        limit = int(max_pairs or max(1, lengths[batch_idx] // 2))
+        for value, flat_idx in zip(values[batch_idx].tolist(), indices[batch_idx].tolist()):
+            if value < threshold or len(selected) >= limit:
+                break
+            i = flat_idx // max_len
+            j = flat_idx % max_len
+            if i in used or j in used:
+                continue
+            if prevent_crossing and any(i < a < j < b or a < i < b < j for a, b in selected):
+                continue
+            selected.append((i, j))
+            used.add(i)
+            used.add(j)
+            pred[batch_idx, i, j] = True
+    return pred
+
+
+def greedy_pairs_to_dotbracket(pairs: Sequence[tuple[int, int]], length: int) -> tuple[str, int]:
+    kept: list[tuple[int, int]] = []
+    skipped = 0
+    used: set[int] = set()
+    for raw_i, raw_j in sorted((min(i, j), max(i, j)) for i, j in pairs):
+        if raw_i in used or raw_j in used:
+            skipped += 1
+            continue
+        if any(raw_i < a < raw_j < b or a < raw_i < b < raw_j for a, b in kept):
+            skipped += 1
+            continue
+        kept.append((raw_i, raw_j))
+        used.add(raw_i)
+        used.add(raw_j)
+    return pairs_to_dot_bracket(kept, length), skipped
+
+
+def pairs_matrix_to_dotbracket_batch(pair_matrix: torch.Tensor, lengths: list[int]) -> list[str]:
+    structs, _ = pairs_matrix_to_dotbracket_batch_with_stats(pair_matrix, lengths)
+    return structs
+
+
+def pairs_matrix_to_dotbracket_batch_with_stats(
+    pair_matrix: torch.Tensor,
+    lengths: list[int],
+) -> tuple[list[str], list[int]]:
+    matrix = pair_matrix.detach().bool().cpu()
+    structs: list[str] = []
+    skipped: list[int] = []
+    for batch_idx, length in enumerate(lengths):
+        pairs = [
+            (int(i), int(j))
+            for i, j in torch.nonzero(matrix[batch_idx, :length, :length], as_tuple=False).tolist()
+            if i < j
+        ]
+        struct, count = greedy_pairs_to_dotbracket(pairs, length)
+        structs.append(struct)
+        skipped.append(count)
+    return structs, skipped
 
 
 @torch.no_grad()

@@ -209,6 +209,8 @@ def build_full_summary(
         "completed": completed,
         "config": str(config_path),
         "output_dir": str(out),
+        "decode_method": benchmark.get("decode_method", "unknown"),
+        "decode_warning": benchmark.get("decode_warning", ""),
         "elapsed_seconds": elapsed,
         "device": train_row.get("device", "unknown"),
         "cuda": train_row.get("cuda"),
@@ -259,6 +261,7 @@ def write_full_report(summary: dict, out: Path) -> None:
         "",
         f"- Full completed: {summary['completed']}",
         f"- Config: `{summary.get('config')}`",
+        f"- Decode method: {summary.get('decode_method')}",
         f"- Device: {summary.get('device')} CUDA={summary.get('cuda')} GPU={summary.get('gpu')}",
         f"- Total time: {elapsed_min:.2f} min",
         f"- Best epoch: {summary.get('best_epoch')}",
@@ -312,6 +315,15 @@ def write_full_report(summary: dict, out: Path) -> None:
         ]
     if summary.get("recommended_config"):
         lines += ["", f"Recommended intervention config: `{summary['recommended_config']}`"]
+    if summary.get("decode_method") == "greedy":
+        lines += [
+            "",
+            "## Decode Warning",
+            "",
+            "Greedy decode is a fast approximate benchmark path. It is used to test pair-head structural signal and benchmark throughput. Strict Nussinov benchmark should still be run for final reporting if feasible.",
+            "",
+            str(summary.get("decode_warning") or ""),
+        ]
     if summary.get("failed_step"):
         lines += [
             "",
@@ -429,13 +441,21 @@ def run_potential(args: argparse.Namespace) -> None:
     start = time.time()
     steps = [
         ("train", [sys.executable, "main.py", "train", "--config", str(config_path), "--device", args.device]),
-        ("benchmark", [sys.executable, "scripts/eval.py", "bench", "--config", str(config_path), "--ckpt", str(out / "best.pt"), "--split", "test", "--out", str(out / "benchmark.json"), "--device", args.device]),
+        ("benchmark", [sys.executable, "scripts/eval.py", "bench", "--config", str(config_path), "--ckpt", str(out / "best.pt"), "--split", "test", "--out", str(out / "benchmark.json"), "--device", args.device, "--decode", args.decode]),
         ("analyze", [sys.executable, "scripts/eval.py", "analyze", "--log", str(out / "trainlog.jsonl"), "--out", str(out / "analysis.json")]),
         ("diagnose", [sys.executable, "scripts/eval.py", "diagnose", "--pred", str(out / "predictions.jsonl"), "--out", str(out / "diagnosis.json")]),
     ]
     if args.mode == "quick":
         steps[0][1].extend(["--train_subset", "32", "--max_steps", "8"])
         steps[1][1].extend(["--samples", "128"])
+    if args.bench_limit:
+        steps[1][1].extend(["--limit", str(args.bench_limit)])
+    if args.bench_profile:
+        steps[1][1].append("--profile")
+    if args.bench_resume:
+        steps[1][1].append("--resume")
+    if args.bench_batch:
+        steps[1][1].extend(["--batch", str(args.bench_batch)])
     for name, cmd in steps:
         log_path = logs / f"{name}.log"
         code = run_logged(cmd, log_path)
@@ -481,6 +501,11 @@ def main() -> None:
     potential.add_argument("--config")
     potential.add_argument("--mode", choices=["quick", "full"], default="quick")
     potential.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    potential.add_argument("--decode", choices=["nussinov", "greedy"], default="nussinov")
+    potential.add_argument("--bench_limit", type=int)
+    potential.add_argument("--bench_profile", action="store_true")
+    potential.add_argument("--bench_resume", action="store_true")
+    potential.add_argument("--bench_batch", type=int)
     potential.set_defaults(func=run_potential)
     ablate = sub.add_parser("ablate")
     ablate.add_argument("--config", default="config/archive.yaml")

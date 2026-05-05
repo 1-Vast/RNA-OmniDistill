@@ -17,10 +17,11 @@
 - `models/omni.py`: Transformer model, pair head, and loss.
 - `models/mask.py`: masking helpers.
 - `models/decode.py`: iterative decoding and Nussinov decoding.
+- `models/decode.py`: also includes GPU batched greedy pair decoding for fast benchmark checks.
 - `utils/struct.py`: dot-bracket and motif utilities.
 - `utils/metric.py`: token and pair metrics.
 - `scripts/data.py`: fetch, prep, check, split.
 - `scripts/probe.py`: smoke, overfit, real-data probes.
 - `scripts/audit.py`: name, alignment, and runtime audits.
-- `scripts/eval.py`: benchmark, export, analyze, diagnose, compare.
+- `scripts/eval.py`: benchmark, export, analyze, diagnose, compare; benchmark supports strict Nussinov and fast greedy decoding.
 - `scripts/run.py`: potential, ablate, and sweep workflows.
