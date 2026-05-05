@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -16,16 +16,79 @@ from torch.utils.data import BatchSampler, DataLoader, Sampler, Subset
 
 from data.collator import RNAOmniCollator
 from data.dataset import RNAOmniDataset
-from data.tokenizer import RNAOmniTokenizer
-from models.decoding import generate_sequence_invfold, generate_structure_seq2struct
-from models.rna_omnidiffusion import RNAOmniDiffusion, compute_omni_loss
-from utils.metrics import base_pair_f1, evaluate_structures
+from data.token import RNAOmniTokenizer
+from models.decode import generate_sequence_invfold, generate_structure_seq2struct
+from models.omni import RNAOmniDiffusion, compute_omni_loss
+from utils.metric import base_pair_f1, evaluate_structures
 
 
 def load_config(path: str | Path) -> Dict[str, Any]:
     with Path(path).open("r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
+    config = normalize_config(config or {})
     return apply_ablation_settings(config)
+
+
+def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    data = config.setdefault("data", {})
+    if "train" in data:
+        data["train_jsonl"] = data["train"]
+    if "val" in data:
+        data["val_jsonl"] = data["val"]
+    if "test" in data:
+        data["test_jsonl"] = data["test"]
+    if "maxlen" in data:
+        data["max_length"] = data["maxlen"]
+
+    training = config.setdefault("training", {})
+    aliases = {
+        "out": "output_dir",
+        "lambdaPair": "lambda_pair",
+        "lambdaStruct": "lambda_struct",
+        "lambdaSeq": "lambda_seq",
+        "pairRatio": "pair_negative_ratio",
+        "pairWeight": "pair_positive_weight",
+        "clip": "grad_clip",
+    }
+    for src, dst in aliases.items():
+        if src in training:
+            training[dst] = training[src]
+    training.setdefault("lambda_pair", training.get("lambdaPair", 0.5))
+    training.setdefault("pair_positive_weight", training.get("pairWeight", "auto"))
+    training.setdefault("pair_negative_ratio", training.get("pairRatio", 3))
+    training.setdefault("output_dir", training.get("out", "outputs/archive"))
+
+    decoding = config.setdefault("decoding", {})
+    if "threshold" in decoding:
+        decoding["pair_threshold"] = decoding["threshold"]
+    if "gamma" in decoding:
+        decoding["nussinov_gamma"] = decoding["gamma"]
+    if "source" in decoding:
+        decoding["decode_source"] = decoding["source"]
+
+    model = config.setdefault("model", {})
+    model.setdefault("pairhead", "mlp")
+    model.setdefault("pairhidden", model.get("hidden_size", 512))
+    model.setdefault("pairdrop", model.get("dropout", 0.1))
+    model.setdefault("distbias", False)
+    model.setdefault("distbuckets", 32)
+    model.setdefault("distmax", data.get("max_length", 512))
+    model.setdefault("invalidlogit", -20.0)
+    return config
+
+
+def resolve_device(name: str | None = "auto") -> torch.device:
+    requested = (name or "auto").lower()
+    if requested == "auto":
+        requested = "cuda" if torch.cuda.is_available() else "cpu"
+    if requested == "cuda" and not torch.cuda.is_available():
+        raise SystemExit("CUDA was requested with --device cuda, but torch.cuda.is_available() is False.")
+    device = torch.device(requested)
+    if device.type == "cuda":
+        print(f"Using CUDA GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print("Using CPU")
+    return device
 
 
 def apply_ablation_settings(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -135,6 +198,13 @@ def build_model(config: Dict[str, Any], tokenizer: RNAOmniTokenizer, device: tor
         max_position_embeddings=int(model_cfg["max_position_embeddings"]),
         num_tasks=len(tokenizer.task_to_id),
         use_pair_head=bool(config.get("ablation", {}).get("use_pair_head", True)),
+        pairhead=str(model_cfg.get("pairhead", "mlp")),
+        pairhidden=int(model_cfg.get("pairhidden", model_cfg["hidden_size"])),
+        pairdrop=float(model_cfg.get("pairdrop", model_cfg.get("dropout", 0.1))),
+        distbias=bool(model_cfg.get("distbias", False)),
+        distbuckets=int(model_cfg.get("distbuckets", 32)),
+        distmax=int(model_cfg.get("distmax", config.get("data", {}).get("max_length", 512))),
+        invalidlogit=float(model_cfg.get("invalidlogit", -20.0)),
     )
     return model.to(device)
 
@@ -146,10 +216,19 @@ def make_loader(
     shuffle: bool,
 ) -> DataLoader:
     training_cfg = config["training"]
+    data_cfg = config.get("data", {})
+    num_workers = int(data_cfg.get("num_workers", 0))
+    loader_kwargs = {
+        "num_workers": num_workers,
+        "pin_memory": bool(data_cfg.get("pin_memory", False)),
+    }
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = bool(data_cfg.get("persistent_workers", True))
+        loader_kwargs["prefetch_factor"] = int(data_cfg.get("prefetch_factor", 2))
     collator = RNAOmniCollator(
         tokenizer=tokenizer,
         task_ratios=config["tasks"],
-        pair_negative_ratio=int(training_cfg.get("pair_negative_ratio", 3)),
+        pair_negative_ratio=int(training_cfg.get("pair_negative_ratio", training_cfg.get("pairRatio", 3))),
         seed=int(training_cfg.get("seed", 42)),
         ablation=config.get("ablation", {}),
     )
@@ -165,14 +244,14 @@ def make_loader(
             dataset,
             batch_sampler=batch_sampler,
             collate_fn=collator,
-            num_workers=int(config.get("data", {}).get("num_workers", 0)),
+            **loader_kwargs,
         )
     return DataLoader(
         dataset,
         batch_size=int(training_cfg["batch_size"]),
         shuffle=shuffle,
         collate_fn=collator,
-        num_workers=int(config.get("data", {}).get("num_workers", 0)),
+        **loader_kwargs,
     )
 
 
@@ -216,7 +295,7 @@ class LengthGroupedBatchSampler(Sampler[list[int]]):
 def move_batch_to_device(batch: dict, device: torch.device) -> dict:
     moved = {}
     for key, value in batch.items():
-        moved[key] = value.to(device) if torch.is_tensor(value) else value
+        moved[key] = value.to(device, non_blocking=True) if torch.is_tensor(value) else value
     return moved
 
 
@@ -258,7 +337,7 @@ def load_checkpoint(ckpt_path: str | Path, device: torch.device) -> tuple[Dict[s
         checkpoint = torch.load(path, map_location=device, weights_only=False)
     except TypeError:
         checkpoint = torch.load(path, map_location=device)
-    config = apply_ablation_settings(checkpoint["config"])
+    config = apply_ablation_settings(normalize_config(checkpoint["config"]))
     tokenizer = RNAOmniTokenizer.from_dict(checkpoint["tokenizer"])
     return config, tokenizer, checkpoint
 
@@ -309,6 +388,15 @@ def estimate_loss_options(config: Dict[str, Any], dataset: RNAOmniDataset, token
         "lambda_struct": float(training.get("lambda_struct", 1.0)),
         "token_id_weights": token_weights,
         "pair_pos_weight": pair_pos_weight,
+        "pair_options": {
+            "pairWeight": training.get("pair_positive_weight", training.get("pairWeight", "auto")),
+            "pairRatio": int(training.get("pair_negative_ratio", training.get("pairRatio", 3))),
+            "pairUpper": bool(training.get("pairUpper", True)),
+            "pairLoop": int(training.get("pairLoop", 3)),
+            "pairDiag": bool(training.get("pairDiag", False)),
+            "pairFloat": bool(training.get("pairFloat", True)),
+            "sampleNegOnGpu": bool(training.get("sampleNegOnGpu", True)),
+        },
         "use_pair_loss": bool(config.get("ablation", {}).get("use_pair_loss", True))
         and bool(config.get("ablation", {}).get("use_pair_head", True)),
         "structure_bracket_weight": float(bracket_weight),
@@ -325,6 +413,7 @@ def loss_from_batch(outputs: dict, batch: dict, loss_options: dict) -> dict:
         token_id_weights=loss_options["token_id_weights"],
         pair_pos_weight=loss_options["pair_pos_weight"],
         use_pair_loss=loss_options["use_pair_loss"],
+        pair_options=loss_options.get("pair_options"),
     )
 
 
@@ -332,15 +421,68 @@ def update_running(total: dict, loss_dict: dict, batch_size: int) -> None:
     total["samples"] += batch_size
     for key in ("loss", "token_loss", "pair_loss"):
         total[key] += float(loss_dict[key].detach().cpu()) * batch_size
+    for key in (
+        "pos",
+        "neg",
+        "weight",
+        "posLogit",
+        "negLogit",
+        "gap",
+        "posProb",
+        "negProb",
+        "rankAcc",
+        "pos_pair_count",
+        "neg_pair_count",
+        "pair_positive_weight_used",
+        "positive_pair_logit_mean",
+        "negative_pair_logit_mean",
+        "pair_logit_gap",
+        "positive_pair_prob_mean",
+        "negative_pair_prob_mean",
+        "pair_ranking_accuracy_sampled",
+    ):
+        value = loss_dict.get(key)
+        if value is None:
+            continue
+        if torch.is_tensor(value):
+            value = float(value.detach().cpu())
+        total.setdefault(f"{key}_sum", 0.0)
+        total.setdefault(f"{key}_count", 0)
+        total[f"{key}_sum"] += float(value)
+        total[f"{key}_count"] += 1
 
 
 def averages(total: dict, prefix: str) -> dict:
     denom = max(1, total["samples"])
-    return {
+    result = {
         f"{prefix}_loss": total["loss"] / denom,
         f"{prefix}_token_loss": total["token_loss"] / denom,
         f"{prefix}_pair_loss": total["pair_loss"] / denom,
     }
+    for key in (
+        "pos",
+        "neg",
+        "weight",
+        "posLogit",
+        "negLogit",
+        "gap",
+        "posProb",
+        "negProb",
+        "rankAcc",
+        "pos_pair_count",
+        "neg_pair_count",
+        "pair_positive_weight_used",
+        "positive_pair_logit_mean",
+        "negative_pair_logit_mean",
+        "pair_logit_gap",
+        "positive_pair_prob_mean",
+        "negative_pair_prob_mean",
+        "pair_ranking_accuracy_sampled",
+    ):
+        count = total.get(f"{key}_count", 0)
+        if count:
+            result[key] = total[f"{key}_sum"] / count
+    return result
 
 
 def decode_batch_tokens(tokenizer: RNAOmniTokenizer, logits: torch.Tensor) -> torch.Tensor:
@@ -484,6 +626,8 @@ def format_epoch_metrics(metrics: dict) -> str:
         "val_canonical_pair_ratio",
         "val_all_dot_ratio",
         "learning_rate",
+        "gap",
+        "rankAcc",
         "epoch_time",
     ]
     parts = []
@@ -510,6 +654,7 @@ def train_model(
     config: Dict[str, Any],
     max_steps: int | None = None,
     train_subset: int | None = None,
+    device_name: str | None = "auto",
 ) -> dict:
     set_seed(int(config["training"].get("seed", 42)))
     ensure_dataset_paths(config, create_if_missing=True)
@@ -520,7 +665,10 @@ def train_model(
     else:
         train_dataset_for_loader = train_dataset
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = resolve_device(device_name)
+    if device.type == "cuda":
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cudnn.benchmark = True
     model = build_model(config, tokenizer, device)
     train_loader = make_loader(train_dataset_for_loader, tokenizer, config, shuffle=True)
     val_loader = make_loader(val_dataset, tokenizer, config, shuffle=False)
@@ -555,16 +703,20 @@ def train_model(
         global_step = int(checkpoint.get("global_step", 0))
         print(f"Resumed training from {resume_path} at epoch {start_epoch}.")
     use_amp = bool(config["training"].get("amp", True)) and device.type == "cuda"
-    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
     output_dir = Path(config["training"]["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
     with (output_dir / "config_used.yaml").open("w", encoding="utf-8") as handle:
         yaml.safe_dump(config, handle, sort_keys=False)
-    log_path = output_dir / "train_log.jsonl"
+    log_path = output_dir / "trainlog.jsonl"
+    old_log_path = output_dir / "train_log.jsonl"
     best_path = output_dir / "best.pt"
     last_path = output_dir / "last.pt"
-    if not resume_path and log_path.exists():
-        log_path.unlink()
+    if not resume_path:
+        if log_path.exists():
+            log_path.unlink()
+        if old_log_path.exists():
+            old_log_path.unlink()
     best_score = -math.inf
     best_metric_name = str(config["training"].get("save_best_by", "val_pair_f1"))
     history = []
@@ -585,7 +737,7 @@ def train_model(
         for batch in train_loader:
             batch = move_batch_to_device(batch, device)
             optimizer.zero_grad(set_to_none=True)
-            with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+            with torch.cuda.amp.autocast(enabled=use_amp):
                 outputs = forward_model(model, batch)
                 loss_dict = loss_from_batch(outputs, batch, loss_options)
                 loss = loss_dict["loss"]
@@ -608,8 +760,15 @@ def train_model(
                 break
 
         val_eval_samples = val_dataset.samples
+        val_decode_samples = int(config["training"].get("val_decode_samples", len(val_eval_samples)))
+        if val_decode_samples > 0:
+            val_eval_samples = val_eval_samples[: min(val_decode_samples, len(val_eval_samples))]
         if max_steps is not None:
             val_eval_samples = val_eval_samples[: min(32, len(val_eval_samples))]
+        val_max_batches = config["training"].get("val_max_batches")
+        if val_max_batches is not None:
+            val_max_batches = int(val_max_batches)
+        train_decode_structures = bool(config["training"].get("train_decode_structures", True))
         val_metrics = evaluate_model(
             model,
             val_loader,
@@ -618,8 +777,8 @@ def train_model(
             config,
             device,
             loss_options,
-            max_batches=2 if max_steps else None,
-            decode_structures=True,
+            max_batches=2 if max_steps else val_max_batches,
+            decode_structures=train_decode_structures,
         )
         epoch_metrics = {
             "epoch": epoch,
@@ -627,6 +786,12 @@ def train_model(
             **averages(train_totals, "train"),
             **val_metrics,
             "learning_rate": float(optimizer.param_groups[0]["lr"]),
+            "lr": float(optimizer.param_groups[0]["lr"]),
+            "device": device.type,
+            "cuda": bool(device.type == "cuda"),
+            "gpu": torch.cuda.get_device_name(0) if device.type == "cuda" else "",
+            "amp": bool(use_amp),
+            "memory": int(torch.cuda.max_memory_allocated()) if device.type == "cuda" else 0,
             "epoch_time": time.time() - epoch_start,
         }
         history.append(epoch_metrics)
@@ -635,7 +800,8 @@ def train_model(
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(epoch_metrics) + "\n")
         save_checkpoint(last_path, model, tokenizer, config, epoch, epoch_metrics, optimizer, scheduler, global_step)
-        score = float(epoch_metrics.get(best_metric_name, -math.inf))
+        raw_score = float(epoch_metrics.get(best_metric_name, math.inf if best_metric_name.endswith("loss") else -math.inf))
+        score = -raw_score if best_metric_name.endswith("loss") else raw_score
         if score > best_score + min_delta:
             best_score = score
             stale_epochs = 0
@@ -662,13 +828,13 @@ def run_train(args: argparse.Namespace) -> None:
     config = load_config(args.config)
     if args.resume:
         config["training"]["resume_from"] = args.resume
-    result = train_model(config, max_steps=args.max_steps, train_subset=args.train_subset)
+    result = train_model(config, max_steps=args.max_steps, train_subset=args.train_subset, device_name=args.device)
     print(f"Best checkpoint: {result['best_path']}")
     print(f"Last checkpoint: {result['last_path']}")
 
 
 def run_eval(args: argparse.Namespace) -> None:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = resolve_device(args.device)
     try:
         ckpt_config, tokenizer, checkpoint = load_checkpoint(args.ckpt, device)
     except FileNotFoundError as exc:
@@ -680,7 +846,13 @@ def run_eval(args: argparse.Namespace) -> None:
     config["decoding"] = deep_update(config.get("decoding", {}), user_config.get("decoding", {}))
     val_dataset = RNAOmniDataset(config["data"]["val_jsonl"], max_length=int(config["data"]["max_length"]))
     model = build_model(config, tokenizer, device)
-    model.load_state_dict(checkpoint["model_state"])
+    try:
+        model.load_state_dict(checkpoint["model_state"])
+    except RuntimeError as exc:
+        raise SystemExit(
+            "Checkpoint is not compatible with the current model structure. "
+            "The pair head was changed to an MLP; retrain the checkpoint or use a matching config."
+        ) from exc
     loader = make_loader(val_dataset, tokenizer, config, shuffle=False)
     loss_options = estimate_loss_options(config, val_dataset, tokenizer)
     metrics = evaluate_model(model, loader, val_dataset.samples, tokenizer, config, device, loss_options)
@@ -694,14 +866,20 @@ def run_eval(args: argparse.Namespace) -> None:
 
 
 def run_infer(args: argparse.Namespace) -> None:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = resolve_device(args.device)
     try:
         config, tokenizer, checkpoint = load_checkpoint(args.ckpt, device)
     except FileNotFoundError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1)
     model = build_model(config, tokenizer, device)
-    model.load_state_dict(checkpoint["model_state"])
+    try:
+        model.load_state_dict(checkpoint["model_state"])
+    except RuntimeError as exc:
+        raise SystemExit(
+            "Checkpoint is not compatible with the current model structure. "
+            "The pair head was changed to an MLP; retrain the checkpoint or use a matching config."
+        ) from exc
     model.eval()
     if args.task == "seq2struct":
         if not args.seq:
@@ -718,7 +896,7 @@ def run_infer(args: argparse.Namespace) -> None:
 
 
 def run_smoke(args: argparse.Namespace) -> None:
-    config = load_config("config/config.yaml")
+    config = load_config("config/base.yaml")
     config = deep_update(
         config,
         {
@@ -744,7 +922,7 @@ def run_smoke(args: argparse.Namespace) -> None:
         },
     )
     create_tiny_jsonl_dataset(config, overwrite=False)
-    result = train_model(config, max_steps=2)
+    result = train_model(config, max_steps=2, device_name="auto")
     model = result["model"]
     tokenizer = result["tokenizer"]
     model.eval()
@@ -764,23 +942,26 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     train = subparsers.add_parser("train")
-    train.add_argument("--config", default="config/config.yaml")
+    train.add_argument("--config", default="config/base.yaml")
     train.add_argument("--resume")
     train.add_argument("--max_steps", type=int)
     train.add_argument("--train_subset", type=int)
+    train.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     train.set_defaults(func=run_train)
 
     eval_parser = subparsers.add_parser("eval")
-    eval_parser.add_argument("--config", default="config/config.yaml")
+    eval_parser.add_argument("--config", default="config/base.yaml")
     eval_parser.add_argument("--ckpt", required=True)
+    eval_parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     eval_parser.set_defaults(func=run_eval)
 
     infer = subparsers.add_parser("infer")
-    infer.add_argument("--config", default="config/config.yaml")
+    infer.add_argument("--config", default="config/base.yaml")
     infer.add_argument("--ckpt", required=True)
     infer.add_argument("--task", required=True, choices=["seq2struct", "invfold"])
     infer.add_argument("--seq")
     infer.add_argument("--struct")
+    infer.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     infer.set_defaults(func=run_infer)
 
     smoke = subparsers.add_parser("smoke")
@@ -796,3 +977,4 @@ def main(argv: Iterable[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
+

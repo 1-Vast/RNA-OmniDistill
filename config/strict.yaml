@@ -1,11 +1,9 @@
 data:
-  train_jsonl: dataset/processed/train.jsonl
-  val_jsonl: dataset/processed/val.jsonl
-  test_jsonl: dataset/processed/test.jsonl
+  train_jsonl: dataset/archive/train.jsonl
+  val_jsonl: dataset/archive/val.jsonl
+  test_jsonl: dataset/archive/test.jsonl
   max_length: 512
   num_workers: 0
-  deduplicate: true
-  dedup_by: seq_struct
   length_grouping: false
   length_bucket_size: 50
 
@@ -21,6 +19,13 @@ model:
   num_heads: 8
   dropout: 0.1
   max_position_embeddings: 2048
+  pairhead: mlp
+  pairhidden: 512
+  pairdrop: 0.1
+  distbias: true
+  distbuckets: 32
+  distmax: 512
+  invalidlogit: -20.0
 
 training:
   batch_size: 8
@@ -28,17 +33,24 @@ training:
   lr: 0.0001
   weight_decay: 0.01
   warmup_steps: 500
-  lambda_pair: 5.0
+  lambda_pair: 2.0
+  lambdaPair: 2.0
   lambda_struct: 1.0
   lambda_seq: 1.0
-  pair_negative_ratio: 3
-  pair_positive_weight: 10.0
+  pair_negative_ratio: 5
+  pairRatio: 5
+  pair_positive_weight: 3.0
+  pairWeight: 3.0
+  pairUpper: true
+  pairLoop: 3
+  pairDiag: false
+  pairFloat: true
   structure_positive_weight: 5.0
   grad_clip: 1.0
   amp: true
   seed: 42
-  output_dir: outputs/base
-  out: outputs/base
+  output_dir: outputs/strict
+  out: outputs/strict
   save_best_by: val_pair_f1
   early_stopping_patience: 10
   min_delta: 0.0001
@@ -51,8 +63,11 @@ decoding:
   use_nussinov: true
   allow_wobble: true
   decode_source: pair
-  pair_threshold: 0.25
+  source: pair
+  pair_threshold: 0.35
+  threshold: 0.35
   nussinov_gamma: 2.0
+  gamma: 2.0
   topk_pairs: 20
 
 ablation:

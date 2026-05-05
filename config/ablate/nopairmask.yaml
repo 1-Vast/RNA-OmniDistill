@@ -1,0 +1,6 @@
+﻿training:
+  output_dir: outputs/ablate/nopairmask
+ablation:
+  use_pair_aware_masking: false
+
+

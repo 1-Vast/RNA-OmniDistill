@@ -1,0 +1,11 @@
+﻿training:
+  output_dir: outputs/ablate/nopair
+ablation:
+  use_pair_head: false
+  use_pair_loss: false
+  decode_source: token
+decoding:
+  use_nussinov: false
+  decode_source: token
+
+

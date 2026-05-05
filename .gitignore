@@ -8,10 +8,17 @@ outputs/
 *.pt
 *.pth
 *.ckpt
+dataset/archive/
+dataset/raw/
+dataset/processed_archiveii/
+dataset/processed/*.clean.jsonl
+dataset/processed/*.checked.jsonl
+dataset/processed/prepare_errors.jsonl
 
 .env
 .venv/
 venv/
+.vscode/
 
 .DS_Store
 Thumbs.db

@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import warnings
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-from utils.structure import ALLOWED_STRUCT_CHARS, infer_simple_motifs, parse_dot_bracket
+from utils.struct import ALLOWED_STRUCT_CHARS, infer_simple_motifs, parse_dot_bracket
 
 
 class RNAOmniDataset:
@@ -150,3 +150,4 @@ class RNAOmniDataset:
                 }
             )
         return motifs or infer_simple_motifs(seq="N" * length, pairs=[])
+

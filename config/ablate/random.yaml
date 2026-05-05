@@ -1,0 +1,7 @@
+﻿training:
+  output_dir: outputs/ablate/random
+ablation:
+  use_pair_aware_masking: false
+  use_motif_span_masking: false
+
+

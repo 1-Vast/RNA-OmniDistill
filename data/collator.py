@@ -1,12 +1,12 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import random
 from typing import Dict, List, Sequence
 
 import torch
 
-from data.tokenizer import RNAOmniTokenizer
-from models.masking import (
+from data.token import RNAOmniTokenizer
+from models.mask import (
     motif_span_mask_positions,
     pair_aware_mask_positions,
     random_span_positions,
@@ -215,13 +215,8 @@ class RNAOmniCollator:
         for i, j in positive:
             mask[i, j] = True
 
-        candidates = [(i, j) for i in range(length) for j in range(i + 1, length) if (i, j) not in positive]
-        if not candidates:
-            return len(positive), 0
-        if positive:
-            neg_count = min(len(candidates), max(1, len(positive) * self.pair_negative_ratio))
-        else:
-            neg_count = min(len(candidates), max(1, length))
-        for i, j in self.rng.sample(candidates, neg_count):
-            mask[i, j] = True
-        return len(positive), neg_count
+        # Negative pairs are sampled in compute_omni_loss on the target device.
+        # Keeping this collator positive-only avoids Python O(L^2) candidate
+        # enumeration, which otherwise starves the GPU on real ArchiveII batches.
+        return len(positive), 0
+

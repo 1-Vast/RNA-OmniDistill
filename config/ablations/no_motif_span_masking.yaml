@@ -1,5 +1,0 @@
-training:
-  output_dir: outputs/ablations/no_motif_span_masking
-ablation:
-  use_motif_span_masking: false
-
