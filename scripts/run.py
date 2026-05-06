@@ -426,13 +426,29 @@ def write_ablate_summary(rows: list[dict], root: Path, quick: bool) -> None:
 
 
 def write_seed_summary(rows: list[dict], root: Path, tag: str, seeds: list[int], variants: list[str]) -> None:
+    def mean(values: list[float]) -> float:
+        return sum(values) / max(1, len(values))
+
+    def std(values: list[float]) -> float:
+        if len(values) <= 1:
+            return 0.0
+        avg = mean(values)
+        return (sum((value - avg) ** 2 for value in values) / len(values)) ** 0.5
+
     full_rows = [row for row in rows if row["variant"] == "full"]
     random_rows = [row for row in rows if row["variant"] == "random"]
-    mean_full = sum(row["pair_f1"] for row in full_rows) / max(1, len(full_rows))
-    mean_random = sum(row["pair_f1"] for row in random_rows) / max(1, len(random_rows))
+    full_f1 = [row["pair_f1"] for row in full_rows]
+    random_f1 = [row["pair_f1"] for row in random_rows]
     random_by_seed = {row["seed"]: row["pair_f1"] for row in random_rows}
     full_by_seed = {row["seed"]: row["pair_f1"] for row in full_rows}
+    deltas = [full_by_seed[seed] - random_by_seed[seed] for seed in seeds if seed in full_by_seed and seed in random_by_seed]
     random_better = sum(1 for seed in seeds if random_by_seed.get(seed, -1.0) > full_by_seed.get(seed, -1.0))
+    full_better = sum(1 for seed in seeds if full_by_seed.get(seed, -1.0) > random_by_seed.get(seed, -1.0))
+    mean_full = mean(full_f1)
+    mean_random = mean(random_f1)
+    mean_delta = mean(deltas)
+    mean_full_pair_ratio = mean([row["pair_count_ratio"] for row in full_rows])
+    mean_random_pair_ratio = mean([row["pair_count_ratio"] for row in random_rows])
     payload = {
         "tag": tag,
         "seeds": seeds,
@@ -440,31 +456,103 @@ def write_seed_summary(rows: list[dict], root: Path, tag: str, seeds: list[int],
         "rows": rows,
         "aggregate": {
             "mean_full_f1": mean_full,
+            "std_full_f1": std(full_f1),
             "mean_random_f1": mean_random,
-            "mean_delta_random": mean_full - mean_random,
+            "std_random_f1": std(random_f1),
+            "mean_delta_random": mean_delta,
+            "std_delta_random": std(deltas),
             "random_better_count": f"{random_better}/{len(seeds)} seeds",
+            "full_better_count": f"{full_better}/{len(seeds)} seeds",
+            "mean_full_pair_ratio": mean_full_pair_ratio,
+            "mean_random_pair_ratio": mean_random_pair_ratio,
+            "mean_full_valid": mean([row["valid_structure_rate"] for row in full_rows]),
+            "mean_random_valid": mean([row["valid_structure_rate"] for row in random_rows]),
         },
     }
     (root / "summary.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    with (root / "summary.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
     lines = [
-        "| Seed | Variant | Pair F1 | Precision | Recall | Valid | Pair Ratio |",
-        "|---:|---|---:|---:|---:|---:|---:|",
+        "| Seed | Variant | Pair F1 | Precision | Recall | Valid | All-dot | Pair Ratio | Decode | Time |",
+        "|---:|---|---:|---:|---:|---:|---:|---:|---|---:|",
     ]
     for row in rows:
         lines.append(
             f"| {row['seed']} | {row['variant']} | {row['pair_f1']:.4f} | {row['pair_precision']:.4f} | "
-            f"{row['pair_recall']:.4f} | {row['valid_structure_rate']:.4f} | {row['pair_count_ratio']:.4f} |"
+            f"{row['pair_recall']:.4f} | {row['valid_structure_rate']:.4f} | {row['all_dot_ratio']:.4f} | "
+            f"{row['pair_count_ratio']:.4f} | {row['decode_method']} | {row['benchmark_seconds']:.2f} |"
         )
     lines += [
         "",
         "## Aggregate",
         "",
         f"- mean_full_f1: {mean_full:.4f}",
+        f"- std_full_f1: {std(full_f1):.4f}",
         f"- mean_random_f1: {mean_random:.4f}",
-        f"- mean_delta_random: {mean_full - mean_random:.4f}",
+        f"- std_random_f1: {std(random_f1):.4f}",
+        f"- mean_delta_random: {mean_delta:.4f}",
+        f"- std_delta_random: {std(deltas):.4f}",
         f"- random_better_count: {random_better}/{len(seeds)} seeds",
+        f"- full_better_count: {full_better}/{len(seeds)} seeds",
     ]
     (root / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if mean_delta > 0.02 and full_better >= 2:
+        contribution = "positive"
+        paper = "can keep pair-aware/motif-span masking as a supporting contribution."
+    elif -0.02 <= mean_delta <= 0.02:
+        contribution = "inconclusive / negligible"
+        paper = "do not present masking as a main contribution; treat it as an optional design."
+    elif mean_delta < -0.02 and random_better >= 2:
+        contribution = "negative"
+        paper = "remove masking from the main contribution, or consider random masking as the default training strategy."
+    else:
+        contribution = "unstable"
+        paper = "more seeds or a larger dataset are needed; do not claim masking as a main ArchiveII conclusion."
+    full_over = "none"
+    random_over = "none"
+    if mean_full_pair_ratio > 2.0:
+        full_over = "severe over-pairing"
+    elif mean_full_pair_ratio > 1.5:
+        full_over = "mild over-pairing"
+    if mean_random_pair_ratio > 2.0:
+        random_over = "severe over-pairing"
+    elif mean_random_pair_ratio > 1.5:
+        random_over = "mild over-pairing"
+    decision = [
+        "# Masking Seed Repeat Decision",
+        "",
+        "| Seed | Full F1 | Random F1 | Delta Random | Better |",
+        "|---:|---:|---:|---:|---|",
+    ]
+    for seed in seeds:
+        full_value = full_by_seed[seed]
+        random_value = random_by_seed[seed]
+        delta = full_value - random_value
+        better = "full" if delta > 0 else "random" if delta < 0 else "tie"
+        decision.append(f"| {seed} | {full_value:.4f} | {random_value:.4f} | {delta:.4f} | {better} |")
+    decision += [
+        "",
+        "## Aggregate",
+        "",
+        f"- mean_full_f1: {mean_full:.4f}",
+        f"- std_full_f1: {std(full_f1):.4f}",
+        f"- mean_random_f1: {mean_random:.4f}",
+        f"- std_random_f1: {std(random_f1):.4f}",
+        f"- mean_delta_random: {mean_delta:.4f}",
+        f"- std_delta_random: {std(deltas):.4f}",
+        f"- random_better_count: {random_better}/{len(seeds)} seeds",
+        f"- full_better_count: {full_better}/{len(seeds)} seeds",
+        "",
+        "## Judgment",
+        "",
+        f"- Masking contribution: {contribution}",
+        f"- full over-pairing: {full_over} (mean pair ratio={mean_full_pair_ratio:.4f})",
+        f"- random over-pairing: {random_over} (mean pair ratio={mean_random_pair_ratio:.4f})",
+        f"- Paper recommendation: {paper}",
+    ]
+    (root / "decision.md").write_text("\n".join(decision) + "\n", encoding="utf-8")
 
 
 def write_ablate_decision(rows: list[dict], root: Path) -> None:
@@ -727,6 +815,13 @@ def run_ablate(args: argparse.Namespace) -> None:
         benchmark = read_json(out / "benchmark.json")
         if "decode_method" not in benchmark:
             raise SystemExit(f"benchmark.json for {name} is missing decode_method")
+        if out.parts[:2] == ("outputs", "fixed") or str(out).replace("\\", "/").startswith("outputs/fixed"):
+            raise SystemExit(f"Output directory pollution detected for {name}: {out}")
+        if seed is not None:
+            if (out / "reuse_note.json").exists():
+                raise SystemExit(f"Seed repeat must not write reuse_note.json: {out / 'reuse_note.json'}")
+            if benchmark.get("decode_method") != "nussinov":
+                raise SystemExit(f"Seed repeat benchmark must use strict Nussinov for {name}: {benchmark.get('decode_method')}")
         if seed is not None:
             row = metric_row(name, out)
             row["seed"] = seed
