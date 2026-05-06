@@ -263,12 +263,13 @@ Archived (non-mainline): `config/archive_failed/` contains precision/conflict-lo
 |---|---:|---:|---:|---:|---:|---:|---:|
 | **candidate** | **0.5285** | 0.4877 | 0.6070 | 0.5344 | 1.00 | 1.38 | 12,732 |
 | norefine | 0.4399 | 0.4083 | 0.5037 | 0.4451 | 1.00 | 1.42 | 12,732 |
-| oldbase | 0.4023 | 0.3811 | 0.4461 | 0.4050 | 1.00 | 1.39 | 500 |
+| oldbase | 0.4234 | 0.4019 | 0.4741 | 0.4335 | 1.00 | 1.40 | 12,732 |
 
 - **External drop vs ArchiveII**: -7.1% (0.5689 → 0.5285) on 37x larger test set
 - **pairrefine external contribution**: +0.0886 F1 (+20.1% over norefine)
 - **Split**: random (NOT family-disjoint, all bpRNA families = "OTHER")
 - **Conclusion**: external generalization strongly supported
+- **Final gate**: ENTER_FINAL_STAGE_WITH_LIMITATIONS (7/8 checks pass, multitask + family-disjoint pending)
 
 ```bash
 # Download external datasets
