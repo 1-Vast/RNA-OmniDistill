@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 import os
@@ -424,6 +425,48 @@ def write_ablate_summary(rows: list[dict], root: Path, quick: bool) -> None:
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_seed_summary(rows: list[dict], root: Path, tag: str, seeds: list[int], variants: list[str]) -> None:
+    full_rows = [row for row in rows if row["variant"] == "full"]
+    random_rows = [row for row in rows if row["variant"] == "random"]
+    mean_full = sum(row["pair_f1"] for row in full_rows) / max(1, len(full_rows))
+    mean_random = sum(row["pair_f1"] for row in random_rows) / max(1, len(random_rows))
+    random_by_seed = {row["seed"]: row["pair_f1"] for row in random_rows}
+    full_by_seed = {row["seed"]: row["pair_f1"] for row in full_rows}
+    random_better = sum(1 for seed in seeds if random_by_seed.get(seed, -1.0) > full_by_seed.get(seed, -1.0))
+    payload = {
+        "tag": tag,
+        "seeds": seeds,
+        "variants": variants,
+        "rows": rows,
+        "aggregate": {
+            "mean_full_f1": mean_full,
+            "mean_random_f1": mean_random,
+            "mean_delta_random": mean_full - mean_random,
+            "random_better_count": f"{random_better}/{len(seeds)} seeds",
+        },
+    }
+    (root / "summary.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    lines = [
+        "| Seed | Variant | Pair F1 | Precision | Recall | Valid | Pair Ratio |",
+        "|---:|---|---:|---:|---:|---:|---:|",
+    ]
+    for row in rows:
+        lines.append(
+            f"| {row['seed']} | {row['variant']} | {row['pair_f1']:.4f} | {row['pair_precision']:.4f} | "
+            f"{row['pair_recall']:.4f} | {row['valid_structure_rate']:.4f} | {row['pair_count_ratio']:.4f} |"
+        )
+    lines += [
+        "",
+        "## Aggregate",
+        "",
+        f"- mean_full_f1: {mean_full:.4f}",
+        f"- mean_random_f1: {mean_random:.4f}",
+        f"- mean_delta_random: {mean_full - mean_random:.4f}",
+        f"- random_better_count: {random_better}/{len(seeds)} seeds",
+    ]
+    (root / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_ablate_decision(rows: list[dict], root: Path) -> None:
     by_name = {row["variant"]: row for row in rows}
     full = by_name["full"]
@@ -594,18 +637,26 @@ def run_potential(args: argparse.Namespace) -> None:
 
 
 def run_ablate(args: argparse.Namespace) -> None:
-    root = Path("outputs/ablate")
+    seeds = [int(seed) for seed in (args.seeds or [])]
+    tag = args.tag or "repeat"
+    root = Path(f"outputs/ablate_{tag}") if seeds else Path("outputs/ablate")
     root.mkdir(parents=True, exist_ok=True)
     names = args.only or ["full", "nonuss", "random"]
-    for name in names:
-        base = load_yaml(Path(args.config))
+    seed_values = seeds or [None]
+    seed_rows: list[dict] = []
+    for seed in seed_values:
+      for name in names:
+        base = copy.deepcopy(load_yaml(Path(args.config)))
         patch = load_yaml(Path("config/ablate") / f"{name}.yaml")
         base.setdefault("training", {}).update(patch.get("training", {}))
-        if "output_dir" in base["training"]:
-            base["training"]["out"] = base["training"]["output_dir"]
         base.setdefault("ablation", {}).update(patch.get("ablation", {}))
         base.setdefault("decoding", {}).update(patch.get("decoding", {}))
-        path = Path("outputs/ablate") / name / "config.yaml"
+        variant_root = (root / f"seed{seed}" / name) if seed is not None else (root / name)
+        if seed is not None:
+            base["training"]["seed"] = seed
+        base["training"]["out"] = str(variant_root)
+        base["training"]["output_dir"] = str(variant_root)
+        path = variant_root / "config.yaml"
         write_yaml(path, base)
         out = output_dir_from_config(path)
         out.mkdir(parents=True, exist_ok=True)
@@ -650,7 +701,7 @@ def run_ablate(args: argparse.Namespace) -> None:
             print(" ".join([sys.executable, "scripts/eval.py", "analyze", "--log", str(out / "trainlog.jsonl"), "--out", str(out / "analysis.json")]))
             print(" ".join([sys.executable, "scripts/eval.py", "diagnose", "--pred", str(out / "predictions.jsonl"), "--out", str(out / "diagnosis.json")]))
             continue
-        reuse_full = name == "full" and not args.quick and Path("outputs/fixed/best.pt").exists()
+        reuse_full = seed is None and name == "full" and not args.quick and Path("outputs/fixed/best.pt").exists()
         if reuse_full:
             (out / "reuse_note.json").write_text(
                 json.dumps(
@@ -676,7 +727,14 @@ def run_ablate(args: argparse.Namespace) -> None:
         benchmark = read_json(out / "benchmark.json")
         if "decode_method" not in benchmark:
             raise SystemExit(f"benchmark.json for {name} is missing decode_method")
+        if seed is not None:
+            row = metric_row(name, out)
+            row["seed"] = seed
+            seed_rows.append(row)
     if args.dry_run:
+        return
+    if seeds:
+        write_seed_summary(seed_rows, root, tag, seeds, names)
         return
     rows = [metric_row(name, output_dir_from_config(Path("outputs/ablate") / name / "config.yaml")) for name in names]
     write_ablate_summary(rows, root, args.quick)
@@ -724,6 +782,8 @@ def main() -> None:
     ablate.add_argument("--bench_resume", action="store_true")
     ablate.add_argument("--dry_run", action="store_true")
     ablate.add_argument("--quick", action="store_true")
+    ablate.add_argument("--seeds", nargs="*", type=int)
+    ablate.add_argument("--tag")
     ablate.set_defaults(func=run_ablate)
     args = parser.parse_args()
     args.func(args)

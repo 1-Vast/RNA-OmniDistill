@@ -178,6 +178,166 @@ def forward_token_structures(model, tokenizer, samples: list[dict], device: torc
     return structs, forward_seconds
 
 
+def token_invalid_reasons(seq: str, pred: str) -> list[str]:
+    legal = set(".()[]{}")
+    reasons: list[str] = []
+    if len(pred) != len(seq):
+        reasons.append("length_mismatch")
+    if any(char not in legal for char in pred):
+        reasons.append("illegal_token")
+    if pred and set(pred) <= {"."}:
+        reasons.append("all_dot")
+    balance = 0
+    prefix_error = False
+    for char in pred:
+        if char in "([{":
+            balance += 1
+        elif char in ")]}":
+            balance -= 1
+        if balance < 0:
+            prefix_error = True
+            break
+    if prefix_error:
+        reasons.append("prefix_error")
+    if balance != 0:
+        reasons.append("unbalanced")
+    if not validate_structure(seq, pred) and not reasons:
+        reasons.append("unbalanced")
+    return reasons
+
+
+def token_diagnostic_row(sample: dict, pred: str) -> dict:
+    true_struct = sample["struct"]
+    bracket_chars = set("()[]{}")
+    dot_positions = [idx for idx, char in enumerate(true_struct) if char == "."]
+    bracket_positions = [idx for idx, char in enumerate(true_struct) if char in bracket_chars]
+    pred_open = sum(1 for char in pred if char in "([{")
+    pred_close = sum(1 for char in pred if char in ")]}")
+    true_open = sum(1 for char in true_struct if char in "([{")
+    true_close = sum(1 for char in true_struct if char in ")]}")
+    reasons = token_invalid_reasons(sample["seq"], pred)
+    return {
+        "id": sample.get("id", ""),
+        "seq": sample["seq"],
+        "true_struct": true_struct,
+        "pred_struct": pred,
+        "valid": validate_structure(sample["seq"], pred),
+        "reasons": reasons,
+        "reason": reasons[0] if reasons else "",
+        "open_count": pred_open,
+        "close_count": pred_close,
+        "true_open_count": true_open,
+        "true_close_count": true_close,
+        "bracket_token_correct": sum(1 for idx in bracket_positions if idx < len(pred) and pred[idx] == true_struct[idx]),
+        "bracket_token_total": len(bracket_positions),
+        "dot_token_correct": sum(1 for idx in dot_positions if idx < len(pred) and pred[idx] == "."),
+        "dot_token_total": len(dot_positions),
+        "illegal_token_count": sum(1 for char in pred if char not in ".()[]{}"),
+    }
+
+
+def run_token(args: argparse.Namespace) -> None:
+    user_config = load_config(args.config)
+    split_path = Path(user_config["data"][f"{args.split}_jsonl"])
+    if not split_path.exists():
+        raise SystemExit(f"Input JSONL does not exist: {split_path}")
+    if not Path(args.ckpt).exists():
+        raise SystemExit(f"Checkpoint not found: {args.ckpt}")
+    device = resolve_device(args.device)
+    config, tokenizer, checkpoint = load_checkpoint(args.ckpt, device)
+    dataset = RNAOmniDataset(split_path, max_length=int(user_config["data"]["max_length"]))
+    if args.limit:
+        dataset.samples = dataset.samples[: int(args.limit)]
+    model = build_model(config, tokenizer, device)
+    try:
+        model.load_state_dict(checkpoint["model_state"])
+    except RuntimeError as exc:
+        raise SystemExit("Checkpoint is not compatible with the current model structure.") from exc
+    model.eval()
+
+    batch_size = int(args.batch or config.get("training", {}).get("batch_size", 8))
+    rows: list[dict] = []
+    for start in range(0, len(dataset.samples), batch_size):
+        batch_samples = dataset.samples[start : start + batch_size]
+        preds, _ = forward_token_structures(model, tokenizer, batch_samples, device)
+        rows.extend(token_diagnostic_row(sample, pred) for sample, pred in zip(batch_samples, preds))
+
+    samples = len(rows)
+    invalid_counts = {key: 0 for key in ["all_dot", "unbalanced", "prefix_error", "illegal_token", "length_mismatch"]}
+    for item in rows:
+        for reason in item["reasons"]:
+            if reason in invalid_counts:
+                invalid_counts[reason] += 1
+    total_len = sum(len(item["pred_struct"]) for item in rows)
+    bracket_total = sum(item["bracket_token_total"] for item in rows)
+    dot_total = sum(item["dot_token_total"] for item in rows)
+    avg_true_pairs = sum(item["true_open_count"] for item in rows) / max(1, samples)
+    report = {
+        "samples": samples,
+        "valid_structure_rate": sum(1 for item in rows if item["valid"]) / max(1, samples),
+        "all_dot_ratio": invalid_counts["all_dot"] / max(1, samples),
+        "avg_pred_open_count": sum(item["open_count"] for item in rows) / max(1, samples),
+        "avg_pred_close_count": sum(item["close_count"] for item in rows) / max(1, samples),
+        "avg_true_open_count": avg_true_pairs,
+        "avg_true_close_count": sum(item["true_close_count"] for item in rows) / max(1, samples),
+        "open_close_balance_error": sum(abs(item["open_count"] - item["close_count"]) for item in rows) / max(1, samples),
+        "prefix_error_rate": invalid_counts["prefix_error"] / max(1, samples),
+        "final_balance_error_rate": invalid_counts["unbalanced"] / max(1, samples),
+        "illegal_token_rate": sum(item["illegal_token_count"] for item in rows) / max(1, total_len),
+        "bracket_token_accuracy": sum(item["bracket_token_correct"] for item in rows) / max(1, bracket_total),
+        "dot_token_accuracy": sum(item["dot_token_correct"] for item in rows) / max(1, dot_total),
+        "invalid_reason_counts": invalid_counts,
+    }
+    unusable = report["valid_structure_rate"] < 0.5
+    all_dot = report["all_dot_ratio"] > 0.8
+    imbalanced = report["open_close_balance_error"] > max(2.0, 0.25 * max(1.0, avg_true_pairs))
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    bad = [item for item in rows if not item["valid"]][:20]
+    with (out / "examples.jsonl").open("w", encoding="utf-8") as handle:
+        for item in bad:
+            handle.write(
+                json.dumps(
+                    {
+                        "id": item["id"],
+                        "seq": item["seq"],
+                        "true_struct": item["true_struct"],
+                        "pred_struct": item["pred_struct"],
+                        "reason": item["reason"],
+                        "open_count": item["open_count"],
+                        "close_count": item["close_count"],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    dominant_reason = max(invalid_counts.items(), key=lambda kv: kv[1])[0] if samples else ""
+    lines = [
+        "# Token Decode Diagnostic",
+        "",
+        f"- samples: {samples}",
+        f"- valid_structure_rate: {report['valid_structure_rate']:.4f}",
+        f"- all_dot_ratio: {report['all_dot_ratio']:.4f}",
+        f"- dominant invalid reason: {dominant_reason}",
+        f"- avg predicted opens/closes: {report['avg_pred_open_count']:.2f} / {report['avg_pred_close_count']:.2f}",
+        f"- avg true opens/closes: {report['avg_true_open_count']:.2f} / {report['avg_true_close_count']:.2f}",
+        f"- open_close_balance_error: {report['open_close_balance_error']:.4f}",
+        f"- bracket_token_accuracy: {report['bracket_token_accuracy']:.4f}",
+        f"- dot_token_accuracy: {report['dot_token_accuracy']:.4f}",
+        "",
+        "## Judgment",
+        "",
+        f"- token head completely unusable: {'yes' if unusable else 'no'}",
+        f"- mainly all-dot: {'yes' if all_dot else 'no'}",
+        f"- severe bracket imbalance: {'yes' if imbalanced else 'no'}",
+        f"- bracket balancing postprocess needed: {'yes' if imbalanced or report['prefix_error_rate'] > 0 else 'no'}",
+        "- tokenfallback as strict ablation metric: no",
+    ]
+    (out / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"token diagnostic -> {out / 'report.md'}")
+
+
 def stage_logits(
     model,
     tokenizer,
@@ -1037,6 +1197,15 @@ def main() -> None:
     compare.add_argument("--names", nargs="+", required=True)
     compare.add_argument("--out", required=True)
     compare.set_defaults(func=run_compare)
+    token = sub.add_parser("token")
+    token.add_argument("--config", default="config/fixed.yaml")
+    token.add_argument("--ckpt", required=True)
+    token.add_argument("--split", default="test", choices=["train", "val", "test"])
+    token.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    token.add_argument("--limit", type=int)
+    token.add_argument("--batch", type=int)
+    token.add_argument("--out", required=True)
+    token.set_defaults(func=run_token)
     args = parser.parse_args()
     args.func(args)
 
