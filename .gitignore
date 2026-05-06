@@ -14,6 +14,10 @@ dataset/processed_archiveii/
 dataset/processed/*.clean.jsonl
 dataset/processed/*.checked.jsonl
 dataset/processed/prepare_errors.jsonl
+dataset/processed/bprna_random/
+dataset/processed/rfam_random/
+dataset/processed/rfam_family/
+dataset/processed/rfam/
 
 .env
 .venv/

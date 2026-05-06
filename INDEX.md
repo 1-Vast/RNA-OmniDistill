@@ -1,38 +1,53 @@
-# Index
+# RNA-OmniDiffusion — Index
 
-- `main.py`: train, eval, infer, and smoke entrypoint.
-- `config/base.yaml`: toy/default configuration.
-- `config/orig.yaml`: original training plus original decoding baseline.
-- `config/relax.yaml`: original training plus relaxed decoding.
-- `config/fix.yaml`: pairfix training plus original decoding.
-- `config/fixed.yaml`: pairfix training plus relaxed decoding for the current main run.
-- `config/mild.yaml`, `config/strict.yaml`, `config/stable.yaml`: post-full intervention templates.
-- `config/precision.yaml`: precision-oriented pair refinement and conflict-loss experiment.
-- `config/precision_norefine.yaml`, `config/precision_noconflict.yaml`, `config/precision_soft.yaml`: small precision ablation configs.
-- `config/cpu.yaml`: small CPU preflight configuration.
-- `config/scan.json`: decode-only strict Nussinov threshold/gamma scan grid.
-- `config/ablate/`: core ablation patches: `full`, `nopair`, `nonuss`, `random`.
-- `models/omni.py`: Transformer model, pair head, and loss.
-- `models/mask.py`: masking helpers.
-- `models/decode.py`: iterative decoding, strict Nussinov decoding, staged-decode helpers, and greedy probe.
-- `models/dataset.py`: JSONL dataset.
-- `models/collator.py`: task sampling, masking, and pair labels.
-- `models/token.py`: RNA tokenizer.
-- `models/agent/`: reserved empty package for future agent code; no agent is implemented.
-- `utils/struct.py`: dot-bracket and motif utilities.
-- `utils/metric.py`: token and pair metrics.
-- `scripts/data.py`: fetch, prep, check, split.
-- `scripts/probe.py`: smoke, overfit, real-data probes.
-- `scripts/audit.py`: clean, name, alignment, and runtime audits.
-- `scripts/eval.py`: benchmark, export, analyze, diagnose, compare; supports strict Nussinov, staged logits, multiprocessing decode, decode-only scans, and greedy probing.
-- `scripts/run.py`: potential, ablate, and sweep workflows.
-- sandbox/precision/: precision probes (pairrefine validated, conflict loss rejected).
+## Core
 
+- `main.py` — train, eval, infer, smoke entrypoint
+- `models/omni.py` — Transformer model, pair head, pairrefine, loss
+- `models/decode.py` — iterative decoding, strict Nussinov decoding
+- `models/token.py` — RNA tokenizer
+- `models/dataset.py` — JSONL dataset
+- `models/collator.py` — task sampling, masking, pair labels
+- `models/mask.py` — masking helpers
 
-## Config Naming
-- config/candidate.yaml: best candidate (pairrefine=true, masking=false)
-- config/fixed.yaml: alias of candidate
-- config/oldbase.yaml: historical baseline (pairrefine=false, masking=true)
-- config/candidate_norefine.yaml: no pairrefine control
-- config/candidate_oldmask.yaml: old masking control
-- config/archive_failed/: archived non-mainline configs (precision, conflict-loss, semantic ablation)
+## Mainline Configs
+
+- `config/candidate.yaml` — **best candidate model** (pairrefine=true, masking=false)
+- `config/fixed.yaml` — alias of candidate
+- `config/oldbase.yaml` — historical baseline (pairrefine=false, masking=true)
+- `config/candidate_norefine.yaml` — no pairrefine control
+- `config/candidate_oldmask.yaml` — old masking control
+
+## External Configs
+
+- `config/external_bprna_candidate.yaml` — bpRNA candidate
+- `config/external_bprna_norefine.yaml` — bpRNA no pairrefine
+- `config/external_bprna_oldbase.yaml` — bpRNA historical baseline
+
+## Scripts
+
+- `scripts/eval.py` — benchmark, analysis, paper artifact generation
+- `scripts/run.py` — external, multitask, foundation workflows
+- `scripts/dataset.py` — download, prepare, split external datasets
+- `scripts/audit.py` — clean audit, config integrity checks
+- `scripts/semantic.py` — **[EXPERIMENTAL]** offline LLM semantic annotation
+
+## Experimental (Not Mainline)
+
+- `config/multitask_candidate.yaml` — multi-task config (preliminary)
+- `config/archive_failed/` — failed/diagnostic probes (precision, conflict-loss, semantic ablation)
+- `docs/llm_semantic_plan.md` — LLM semantic token future roadmap
+
+## Release
+
+- `release/best_config.yaml` — best candidate configuration
+- `release/model_card.md` — model description and results
+- `release/results_summary.md` — paper-ready tables
+- `release/reproduce.md` — reproduction commands
+- `release/limitations.md` — known limitations
+
+## Security
+
+- `.env` is gitignored — API keys must NOT be committed
+- LLM is NEVER called during benchmark inference
+- LLM API is optional and only used for offline annotation

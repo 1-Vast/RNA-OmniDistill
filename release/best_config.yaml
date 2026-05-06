@@ -1,0 +1,69 @@
+# RNA-OmniDiffusion Best Candidate Configuration
+# This is the current best-performing model configuration.
+# Achieves Pair F1=0.5689 on ArchiveII and F1=0.5285 on bpRNA (12,732 samples).
+
+data:
+  train_jsonl: dataset/archive/train.jsonl
+  val_jsonl: dataset/archive/val.jsonl
+  test_jsonl: dataset/archive/test.jsonl
+  max_length: 512
+
+model:
+  hidden_size: 512
+  num_layers: 8
+  num_heads: 8
+  dropout: 0.1
+  max_position_embeddings: 2048
+  pairhead: mlp
+  pairhidden: 512
+  pairdrop: 0.1
+  distbias: true
+  distbuckets: 32
+  distmax: 512
+  invalidlogit: -20.0
+  pairrefine: true
+  pairrefinechannels: 16
+  pairrefineblocks: 1
+  pairrefinedrop: 0.0
+
+training:
+  batch_size: 24
+  epochs: 20
+  lr: 0.0001
+  weight_decay: 0.01
+  warmup_steps: 500
+  lambda_pair: 5.0
+  lambda_struct: 1.0
+  lambda_seq: 1.0
+  pair_negative_ratio: 5
+  pair_positive_weight: 10.0
+  structure_positive_weight: 1.0
+  grad_clip: 1.0
+  seed: 42
+  output_dir: outputs/candidate
+
+decoding:
+  num_steps: 32
+  min_loop_length: 3
+  use_nussinov: true
+  allow_wobble: true
+  decode_source: pair
+  pair_threshold: 0.25
+  nussinov_gamma: 2.0
+
+ablation:
+  use_pair_head: true
+  use_pair_loss: true
+  use_nussinov: true
+  use_pair_aware_masking: false
+  use_motif_span_masking: false
+  use_motif_condition: false
+  use_family_condition: false
+
+# Key design decisions:
+# - pairrefine: 2D Conv2d residual refinement on pair logits (key contributor, +7.2% F1)
+# - No masking variants: disabled (masking hurts on ArchiveII, -17.2% F1 when enabled)
+# - Strict Nussinov decoding: required for legal non-crossing structures
+# - Conflict loss: rejected (harmful at all tested magnitudes)
+# - Token-only decode: failure mode (valid_rate = 0.0000)
+# - Greedy decode: probe only, NOT a final metric
