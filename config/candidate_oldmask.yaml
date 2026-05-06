@@ -57,8 +57,8 @@ training:
   grad_clip: 1.0
   amp: true
   seed: 42
-  output_dir: outputs/fixed
-  out: outputs/fixed
+  output_dir: outputs/candidate_oldmask
+  out: outputs/candidate_oldmask
   save_best_by: val_loss
   early_stopping_patience: 10
   min_delta: 0.0001
@@ -85,10 +85,10 @@ ablation:
   use_pair_head: true
   use_pair_loss: true
   use_nussinov: true
-  use_pair_aware_masking: false
-  use_motif_span_masking: false
-  use_motif_condition: false
-  use_family_condition: false
+  use_pair_aware_masking: true
+  use_motif_span_masking: true
+  use_motif_condition: true
+  use_family_condition: true
   decode_source: pair
 
 baselines:

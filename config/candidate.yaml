@@ -57,8 +57,8 @@ training:
   grad_clip: 1.0
   amp: true
   seed: 42
-  output_dir: outputs/fixed
-  out: outputs/fixed
+  output_dir: outputs/candidate
+  out: outputs/candidate
   save_best_by: val_loss
   early_stopping_patience: 10
   min_delta: 0.0001

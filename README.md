@@ -143,9 +143,50 @@ python scripts/eval.py bench --config config/fixed.yaml --ckpt outputs/fixed/bes
 - `config/mild.yaml`, `config/strict.yaml`, `config/stable.yaml`: intervention templates. They are not run automatically.
 - `config/cpu.yaml`: CPU preflight configuration.
 
+## Sandbox
+
+sandbox/precision/ contains precision-oriented probe experiments. Pairrefine (2D Conv2d residual refinement) was validated at +10% F1 and merged into the main config. Conflict loss was tested at multiple magnitudes and found consistently harmful. See sandbox/precision/README.md and outputs/sandbox_precision/decision.md for details.
+
 ## Current Limitations
 
 - No pseudoknot decoding by default.
 - No RNA 3D, ligand, or protein tasks.
 - Greedy decoding is a probe only.
 - Quick runs are pipeline checks and are not paper conclusions.
+
+## Current Candidate Model
+
+The current best candidate configuration is `config/candidate.yaml`.
+
+### Architecture
+- **pairrefine**: 2D Conv2d residual refinement on pair logits (key contributor)
+- **No masking variants**: pair-aware, motif-span, motif-condition, family-condition all disabled
+- **Strict Nussinov decoding**: required for legal non-crossing structures
+- **Pair head**: MLP-based pair logit head (primary structure path)
+- **Token head**: auxiliary only; not used as primary structure path
+
+### Results (ArchiveII test, 338 samples, strict Nussinov)
+
+| Variant | Pair F1 | Precision | Recall | Valid | Pair Ratio |
+|---|---:|---:|---:|---:|---:|
+| candidate (pairrefine + nomask) | 0.5689 | 0.5090 | 0.6517 | 1.0000 | 1.3808 |
+| norefine (nomask only) | 0.4966 | 0.4470 | 0.5630 | 1.0000 | 1.3913 |
+| oldmask (pairrefine + masking) | 0.3973 | 0.3519 | 0.4610 | 1.0000 | 1.3886 |
+| old baseline | 0.3846 | 0.3398 | 0.4465 | 1.0000 | 1.4213 |
+
+### Component Analysis
+- **pairrefine contribution**: ΔF1 = 0.0723 (significant)
+- **masking removal contribution**: ΔF1 = 0.1715 (significant)
+- **Combined vs baseline**: ΔF1 = 0.1843 (+47.9%)
+
+### 3-Seed Stability
+Mean F1 = 0.5813 +/- 0.0078 across seeds 42, 43, 44.
+All seeds: valid_rate = 1.0000, pair_ratio < 1.5.
+Candidate is stable.
+
+### Key Findings
+1. Pairrefine is the primary effective new module.
+2. Disabling masking variants is critical on ArchiveII.
+3. Token-only decode fails (valid_rate = 0.0000).
+4. Greedy decode is a probe only; strict Nussinov is the final metric.
+5. Conflict loss is harmful at all tested magnitudes.

@@ -26,3 +26,4 @@
 - `scripts/audit.py`: clean, name, alignment, and runtime audits.
 - `scripts/eval.py`: benchmark, export, analyze, diagnose, compare; supports strict Nussinov, staged logits, multiprocessing decode, decode-only scans, and greedy probing.
 - `scripts/run.py`: potential, ablate, and sweep workflows.
+- sandbox/precision/: precision probes (pairrefine validated, conflict loss rejected).
