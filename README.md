@@ -81,6 +81,18 @@ Final structure metrics should use strict Nussinov decoding.
 python scripts/eval.py bench --config config/fixed.yaml --ckpt outputs/fixed/best.pt --split test --device cuda --decode nussinov --stage_logits --workers 8 --chunksize 2 --profile
 ```
 
+## Precision Sweep
+
+`config/precision.yaml` is a precision-oriented experimental configuration. It enables a lightweight 2D pair-logit refiner and conflict loss, disables the masking variants that were not stable on ArchiveII, lowers positive pair weight, and increases negative pair sampling pressure. `config/fixed.yaml` remains unchanged as the main baseline.
+
+```powershell
+python main.py train --config config/precision.yaml --device cuda --max_steps 20
+python scripts/eval.py bench --config config/precision.yaml --ckpt outputs/precision/best.pt --split test --device cuda --decode nussinov --limit 32 --profile
+python scripts/run.py sweep --configs config/fixed.yaml config/precision.yaml config/precision_norefine.yaml config/precision_noconflict.yaml config/precision_soft.yaml --mode quick --device cuda --decode nussinov --bench_workers 4 --tag precision
+```
+
+The sweep writes to `outputs/sweep_precision/` and does not overwrite `outputs/fixed/`.
+
 Outputs:
 
 ```text

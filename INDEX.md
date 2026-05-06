@@ -7,6 +7,8 @@
 - `config/fix.yaml`: pairfix training plus original decoding.
 - `config/fixed.yaml`: pairfix training plus relaxed decoding for the current main run.
 - `config/mild.yaml`, `config/strict.yaml`, `config/stable.yaml`: post-full intervention templates.
+- `config/precision.yaml`: precision-oriented pair refinement and conflict-loss experiment.
+- `config/precision_norefine.yaml`, `config/precision_noconflict.yaml`, `config/precision_soft.yaml`: small precision ablation configs.
 - `config/cpu.yaml`: small CPU preflight configuration.
 - `config/scan.json`: decode-only strict Nussinov threshold/gamma scan grid.
 - `config/ablate/`: core ablation patches: `full`, `nopair`, `nonuss`, `random`.

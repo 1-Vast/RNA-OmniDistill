@@ -7,6 +7,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class PairRefineBlock(nn.Module):
+    def __init__(self, channels: int, dropout: float) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(1, channels, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.Dropout2d(dropout),
+            nn.Conv2d(channels, 1, kernel_size=3, padding=1),
+        )
+
+    def forward(self, logits: torch.Tensor) -> torch.Tensor:
+        return logits + self.net(logits.unsqueeze(1)).squeeze(1)
+
+
 class RNAOmniDiffusion(nn.Module):
     """Minimal masked discrete diffusion model for RNA sequence/structure tasks."""
 
@@ -28,6 +42,10 @@ class RNAOmniDiffusion(nn.Module):
         distbuckets: int = 32,
         distmax: int = 512,
         invalidlogit: float = -20.0,
+        pairrefine: bool = False,
+        pairrefinechannels: int = 16,
+        pairrefineblocks: int = 1,
+        pairrefinedrop: float = 0.0,
     ) -> None:
         super().__init__()
         self.vocab_size = vocab_size
@@ -38,6 +56,7 @@ class RNAOmniDiffusion(nn.Module):
         self.distbias = bool(distbias)
         self.distbuckets = int(distbuckets)
         self.distmax = int(distmax)
+        self.pairrefine = bool(pairrefine)
         self.token_embedding = nn.Embedding(vocab_size, hidden_size)
         self.position_embedding = nn.Embedding(max_position_embeddings, hidden_size)
         self.segment_embedding = nn.Embedding(num_segments, hidden_size)
@@ -92,6 +111,11 @@ class RNAOmniDiffusion(nn.Module):
             self.pair_bias = nn.Parameter(torch.zeros(1))
             if self.distbias:
                 self.distance_bias = nn.Embedding(self.distbuckets, 1)
+            if self.pairrefine:
+                self.pair_refiner = nn.ModuleList(
+                    PairRefineBlock(int(pairrefinechannels), float(pairrefinedrop))
+                    for _ in range(max(1, int(pairrefineblocks)))
+                )
 
     def forward(
         self,
@@ -166,6 +190,10 @@ class RNAOmniDiffusion(nn.Module):
             dist = (idx[:, None] - idx[None, :]).abs().clamp_max(self.distmax)
             buckets = torch.div(dist * self.distbuckets, self.distmax + 1, rounding_mode="floor").clamp_max(self.distbuckets - 1)
             logits = logits + self.distance_bias(buckets).squeeze(-1)
+        if self.pairrefine:
+            for block in self.pair_refiner:
+                logits = block(logits)
+                logits = 0.5 * (logits + logits.transpose(1, 2))
         invalid = valid.squeeze(-1) == 0
         logits = logits.masked_fill(invalid.unsqueeze(1), self.invalidlogit)
         logits = logits.masked_fill(invalid.unsqueeze(2), self.invalidlogit)
@@ -216,6 +244,30 @@ def _rank_accuracy(pos_logits: torch.Tensor, neg_logits: torch.Tensor) -> torch.
     return (pos_logits[pos_idx] > neg_logits[neg_idx]).float().mean()
 
 
+def _conflict_loss(
+    pair_logits: torch.Tensor,
+    lengths: torch.Tensor,
+    pair_options: dict,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    valid_upper = _pair_valid_mask(lengths, pair_logits.size(-1), pair_options, pair_logits.device)
+    if not valid_upper.any():
+        zero = pair_logits.new_zeros(())
+        return zero, zero, zero
+    probs = pair_logits.float().sigmoid() if pair_options.get("conflictUseProb", True) else F.relu(pair_logits.float())
+    upper_probs = torch.where(valid_upper, probs, torch.zeros_like(probs))
+    sym_probs = upper_probs + upper_probs.transpose(1, 2)
+    idx = torch.arange(pair_logits.size(-1), device=pair_logits.device)
+    row_valid = idx.unsqueeze(0) < lengths.to(pair_logits.device).unsqueeze(1)
+    row_sum = sym_probs.sum(dim=-1)
+    selected = row_sum[row_valid]
+    if selected.numel() == 0:
+        zero = pair_logits.new_zeros(())
+        return zero, zero, zero
+    margin = float(pair_options.get("conflictMargin", 1.0))
+    loss = F.relu(selected - margin).mean()
+    return loss, selected.mean(), selected.max()
+
+
 def compute_omni_loss(
     outputs: Dict[str, torch.Tensor | None],
     batch: dict,
@@ -249,6 +301,9 @@ def compute_omni_loss(
 
     pair_logits = outputs.get("pair_logits")
     pair_loss = token_loss.new_zeros(())
+    conflict_loss = token_loss.new_zeros(())
+    mean_row_sum = token_loss.new_zeros(())
+    max_row_sum = token_loss.new_zeros(())
     pair_options = pair_options or {}
     pair_stats = {
         "pos": token_loss.new_zeros(()),
@@ -298,8 +353,11 @@ def compute_omni_loss(
             pair_stats["weight"] = pos_weight
         if pos_logits.numel() > 0:
             pair_loss = F.binary_cross_entropy_with_logits(selected_logits.float(), selected_labels.float(), pos_weight=pos_weight)
+    lambda_conflict = float(pair_options.get("lambdaConflict", 0.0))
+    if use_pair_loss and pair_logits is not None and lambda_conflict > 0.0:
+        conflict_loss, mean_row_sum, max_row_sum = _conflict_loss(pair_logits, lengths, pair_options)
 
-    total = token_loss + float(lambda_pair) * pair_loss
+    total = token_loss + float(lambda_pair) * pair_loss + lambda_conflict * conflict_loss
     pair_stats["pos_pair_count"] = pair_stats["pos"]
     pair_stats["neg_pair_count"] = pair_stats["neg"]
     pair_stats["pair_positive_weight_used"] = pair_stats["weight"]
@@ -309,7 +367,15 @@ def compute_omni_loss(
     pair_stats["positive_pair_prob_mean"] = pair_stats["posProb"]
     pair_stats["negative_pair_prob_mean"] = pair_stats["negProb"]
     pair_stats["pair_ranking_accuracy_sampled"] = pair_stats["rankAcc"]
-    result = {"loss": total, "token_loss": token_loss.detach(), "pair_loss": pair_loss.detach()}
+    result = {
+        "loss": total,
+        "token_loss": token_loss.detach(),
+        "pair_loss": pair_loss.detach(),
+        "conflict_loss": conflict_loss.detach(),
+        "lambdaConflict": token_loss.new_tensor(lambda_conflict),
+        "mean_row_pair_prob_sum": mean_row_sum.detach(),
+        "max_row_pair_prob_sum": max_row_sum.detach(),
+    }
     for key, value in pair_stats.items():
         if torch.is_tensor(value):
             result[key] = value.detach()

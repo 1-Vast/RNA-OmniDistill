@@ -368,6 +368,34 @@ def quick_config(name: str, mode: str) -> Path:
     return path
 
 
+def sweep_config(config_path: Path, out: Path, mode: str) -> Path:
+    config = load_yaml(config_path)
+    config.setdefault("training", {})
+    config["training"]["out"] = str(out)
+    config["training"]["output_dir"] = str(out)
+    if mode == "quick":
+        config["training"]["epochs"] = 2
+        config["training"]["batch_size"] = min(int(config["training"].get("batch_size", 8)), 2)
+        config["training"]["warmup_steps"] = 1
+        config["training"]["log_every"] = 1
+        config.setdefault("data", {})
+        config["data"]["max_length"] = min(int(config["data"].get("max_length", 512)), 128)
+        config.setdefault("model", {})
+        config["model"]["hidden_size"] = 64
+        config["model"]["num_layers"] = 2
+        config["model"]["num_heads"] = 4
+        config["model"]["max_position_embeddings"] = 512
+        if str(config["model"].get("pairhead", "")).lower() == "pairmlp":
+            config["model"]["pairhidden"] = 64
+        if config["model"].get("pairrefine"):
+            config["model"]["pairrefinechannels"] = min(int(config["model"].get("pairrefinechannels", 16)), 16)
+        config.setdefault("decoding", {})
+        config["decoding"]["num_steps"] = min(int(config["decoding"].get("num_steps", 32)), 4)
+    path = out / "config.yaml"
+    write_yaml(path, config)
+    return path
+
+
 def read_metric(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -610,48 +638,119 @@ def write_ablate_decision(rows: list[dict], root: Path) -> None:
 
 
 def run_sweep(args: argparse.Namespace) -> None:
-    Path("outputs/sweep").mkdir(parents=True, exist_ok=True)
+    root = Path(f"outputs/sweep_{args.tag}") if args.tag else Path("outputs/sweep")
+    root.mkdir(parents=True, exist_ok=True)
     rows = []
-    for name in VARIANTS:
-        config_path = quick_config(name, args.mode)
-        out = Path("outputs/sweep") / name
-        train = [sys.executable, "main.py", "train", "--config", str(config_path), "--device", args.device]
-        if args.mode == "quick":
-            train += ["--train_subset", "32", "--max_steps", "8"]
-        run_cmd(train)
-        run_cmd([sys.executable, "scripts/eval.py", "bench", "--config", str(config_path), "--ckpt", str(out / "best.pt"), "--split", "test", "--out", str(out / "benchmark.json"), "--device", args.device, "--samples", "128" if args.mode == "quick" else "0"])
-        run_cmd([sys.executable, "scripts/eval.py", "analyze", "--log", str(out / "trainlog.jsonl"), "--out", str(out / "analysis.json")])
-        run_cmd([sys.executable, "scripts/eval.py", "diagnose", "--pred", str(out / "predictions.jsonl"), "--out", str(out / "diagnosis.json")])
+    config_paths = [Path(item) for item in (args.configs or [str(Path("config") / f"{name}.yaml") for name in VARIANTS])]
+    for source in config_paths:
+        name = source.stem
+        out = root / name
+        out.mkdir(parents=True, exist_ok=True)
+        config_path = sweep_config(source, out, args.mode)
+        reused = False
+        if name == "fixed" and Path("outputs/fixed/benchmark.json").exists():
+            reused = True
+            (out / "reuse_note.json").write_text(
+                json.dumps({"source_benchmark": "outputs/fixed/benchmark.json", "reused": True}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            benchmark_path = Path("outputs/fixed/benchmark.json")
+            analysis_path = Path("outputs/fixed/analysis.json")
+        else:
+            train = [sys.executable, "main.py", "train", "--config", str(config_path), "--device", args.device]
+            if args.mode == "quick":
+                train += ["--train_subset", "32", "--max_steps", "8"]
+            run_cmd(train)
+            bench = [
+                sys.executable,
+                "scripts/eval.py",
+                "bench",
+                "--config",
+                str(config_path),
+                "--ckpt",
+                str(out / "best.pt"),
+                "--split",
+                "test",
+                "--out",
+                str(out / "benchmark.json"),
+                "--device",
+                args.device,
+                "--decode",
+                args.decode,
+            ]
+            if args.mode == "quick":
+                bench += ["--limit", "128"]
+            if args.bench_workers is not None:
+                bench += ["--workers", str(args.bench_workers)]
+            if args.decode == "nussinov":
+                bench.append("--stage_logits")
+            run_cmd(bench)
+            run_cmd([sys.executable, "scripts/eval.py", "analyze", "--log", str(out / "trainlog.jsonl"), "--out", str(out / "analysis.json")])
+            run_cmd([sys.executable, "scripts/eval.py", "diagnose", "--pred", str(out / "predictions.jsonl"), "--out", str(out / "diagnosis.json")])
+            benchmark_path = out / "benchmark.json"
+            analysis_path = out / "analysis.json"
         metrics = read_metric(out / "benchmark.json")
+        if reused:
+            metrics = read_metric(benchmark_path)
         analysis = read_analysis(out / "analysis.json")
-        base = 0.0
-        if name != "archive":
-            base = rows[0].get("pair_f1", 0.0) if rows else 0.0
+        if reused:
+            analysis = read_analysis(analysis_path)
         ratio = float(metrics.get("avg_pred_pair_count", 0.0)) / max(1e-8, float(metrics.get("avg_true_pair_count", 0.0)))
         best = analysis.get("best", {})
+        config = load_yaml(config_path)
         rows.append({
             "variant": name,
             "pair_f1": float(metrics.get("pair_f1", 0.0)),
-            "base_f1": base,
+            "pair_precision": float(metrics.get("pair_precision", 0.0)),
+            "pair_recall": float(metrics.get("pair_recall", 0.0)),
             "gap": float(best.get("gap", analysis.get("gap", 0.0)) or 0.0),
             "rankAcc": best.get("rankAcc", analysis.get("rankAcc")),
             "all_dot": float(metrics.get("all_dot_ratio", 0.0)),
             "valid": float(metrics.get("valid_structure_rate", 0.0)),
             "pair_ratio": ratio,
+            "conflict": float(best.get("conflict_loss", best.get("train_conflict_loss", 0.0)) or 0.0),
+            "refine": bool(config.get("model", {}).get("pairrefine", False)),
+            "seconds": float(read_json(benchmark_path).get("benchmark_seconds", 0.0)),
+            "reused": reused,
         })
-    out = Path("outputs/sweep")
-    (out / "summary.json").write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
-    with (out / "summary.csv").open("w", newline="", encoding="utf-8") as handle:
+    (root / "summary.json").write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    with (root / "summary.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
-    lines = ["| Variant | Pair F1 | Base F1 | Gap | Rank Acc | All-dot | Valid | Pair Ratio |", "|---|---:|---:|---:|---:|---:|---:|---:|"]
+    lines = ["| Variant | Pair F1 | Precision | Recall | Valid | All-dot | Pair Ratio | Conflict | Refine | Time |", "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for row in rows:
-        rank = row["rankAcc"]
-        rank_text = "" if rank is None else f"{float(rank):.4f}"
-        lines.append(f"| {row['variant']} | {row['pair_f1']:.4f} | {row['base_f1']:.4f} | {row['gap']:.4f} | {rank_text} | {row['all_dot']:.4f} | {row['valid']:.4f} | {row['pair_ratio']:.4f} |")
-    (out / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"sweep -> {out / 'summary.md'}")
+        lines.append(f"| {row['variant']} | {row['pair_f1']:.4f} | {row['pair_precision']:.4f} | {row['pair_recall']:.4f} | {row['valid']:.4f} | {row['all_dot']:.4f} | {row['pair_ratio']:.4f} | {row['conflict']:.4f} | {str(row['refine']).lower()} | {row['seconds']:.2f} |")
+    (root / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    by_name = {row["variant"]: row for row in rows}
+    fixed = by_name.get("fixed", rows[0])
+    precision = by_name.get("precision")
+    decision = ["# Precision Sweep Decision", ""]
+    if precision:
+        f1_delta = precision["pair_f1"] - fixed["pair_f1"]
+        precision_delta = precision["pair_precision"] - fixed["pair_precision"]
+        recall_drop = fixed["pair_recall"] - precision["pair_recall"]
+        ratio_ok = 0.8 <= precision["pair_ratio"] <= 1.3
+        decision += [
+            f"- precision_vs_fixed_pair_f1_delta: {f1_delta:.4f}",
+            f"- precision_vs_fixed_precision_delta: {precision_delta:.4f}",
+            f"- recall_drop: {recall_drop:.4f}",
+            f"- pair_ratio_more_reasonable: {'yes' if ratio_ok else 'no'}",
+            f"- precision_full_recommended: {'yes' if f1_delta > 0.02 else 'no'}",
+        ]
+        norefine = by_name.get("precision_norefine")
+        noconflict = by_name.get("precision_noconflict")
+        soft = by_name.get("precision_soft")
+        if norefine:
+            decision.append(f"- 2D refiner contribution: {precision['pair_f1'] - norefine['pair_f1']:.4f}")
+        if noconflict:
+            decision.append(f"- conflict loss contribution: {precision['pair_f1'] - noconflict['pair_f1']:.4f}")
+        if soft:
+            decision.append(f"- precision_soft_minus_precision: {soft['pair_f1'] - precision['pair_f1']:.4f}")
+        if recall_drop > 0.10:
+            decision.append("- risk: precision setting is too conservative; recall dropped by more than 0.10.")
+    (root / "decision.md").write_text("\n".join(decision) + "\n", encoding="utf-8")
+    print(f"sweep -> {root / 'summary.md'}")
 
 
 def run_potential(args: argparse.Namespace) -> None:
@@ -845,6 +944,10 @@ def main() -> None:
     sweep = sub.add_parser("sweep")
     sweep.add_argument("--mode", choices=["quick", "full"], default="quick")
     sweep.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    sweep.add_argument("--configs", nargs="+")
+    sweep.add_argument("--decode", choices=["nussinov", "greedy"], default="nussinov")
+    sweep.add_argument("--bench_workers", type=int)
+    sweep.add_argument("--tag")
     sweep.set_defaults(func=run_sweep)
     potential = sub.add_parser("potential")
     potential.add_argument("--set", default="archive")
