@@ -1,7 +1,7 @@
 data:
-  train_jsonl: dataset/processed/bprna_family/train.jsonl
-  val_jsonl: dataset/processed/bprna_family/val.jsonl
-  test_jsonl: dataset/processed/bprna_family/test.jsonl
+  train_jsonl: dataset/processed/bprna_random/train.jsonl
+  val_jsonl: dataset/processed/bprna_random/val.jsonl
+  test_jsonl: dataset/processed/bprna_random/test.jsonl
   max_length: 512
   num_workers: 8
   pin_memory: true

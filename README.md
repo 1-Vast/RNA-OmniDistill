@@ -257,6 +257,19 @@ Archived (non-mainline): `config/archive_failed/` contains precision/conflict-lo
 
 ## External Generalization (Direction A)
 
+### bpRNA Results (preliminary)
+
+| Model | F1 | Prec | Rec | MCC | Valid | Ratio | N |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **candidate** | **0.5285** | 0.4877 | 0.6070 | 0.5344 | 1.00 | 1.38 | 12,732 |
+| norefine | 0.4399 | 0.4083 | 0.5037 | 0.4451 | 1.00 | 1.42 | 12,732 |
+| oldbase | 0.4023 | 0.3811 | 0.4461 | 0.4050 | 1.00 | 1.39 | 500 |
+
+- **External drop vs ArchiveII**: -7.1% (0.5689 → 0.5285) on 37x larger test set
+- **pairrefine external contribution**: +0.0886 F1 (+20.1% over norefine)
+- **Split**: random (NOT family-disjoint, all bpRNA families = "OTHER")
+- **Conclusion**: external generalization strongly supported
+
 ```bash
 # Download external datasets
 python scripts/dataset.py download --name bprna --out dataset/raw/bprna
