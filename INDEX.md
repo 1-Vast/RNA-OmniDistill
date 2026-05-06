@@ -10,12 +10,13 @@
 - `config/cpu.yaml`: small CPU preflight configuration.
 - `config/scan.json`: decode-only strict Nussinov threshold/gamma scan grid.
 - `config/ablate/`: core ablation patches: `full`, `nopair`, `nonuss`, `random`.
-- `data/dataset.py`: JSONL dataset.
-- `data/collator.py`: task sampling, masking, and pair labels.
-- `data/token.py`: RNA tokenizer.
 - `models/omni.py`: Transformer model, pair head, and loss.
 - `models/mask.py`: masking helpers.
 - `models/decode.py`: iterative decoding, strict Nussinov decoding, staged-decode helpers, and greedy probe.
+- `models/dataset.py`: JSONL dataset.
+- `models/collator.py`: task sampling, masking, and pair labels.
+- `models/token.py`: RNA tokenizer.
+- `models/agent/`: reserved empty package for future agent code; no agent is implemented.
 - `utils/struct.py`: dot-bracket and motif utilities.
 - `utils/metric.py`: token and pair metrics.
 - `scripts/data.py`: fetch, prep, check, split.

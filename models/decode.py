@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import math
 from typing import Dict, Iterable, List, Sequence, Tuple
@@ -6,7 +6,7 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 import numpy as np
 import torch
 
-from data.token import RNAOmniTokenizer
+from models.token import RNAOmniTokenizer
 from utils.struct import canonical_pair, parse_dot_bracket, pairs_to_dot_bracket
 
 

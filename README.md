@@ -19,14 +19,14 @@ config/
   stable.yaml
   scan.json
   ablate/
-data/
-  dataset.py
-  collator.py
-  token.py
 models/
   omni.py
   mask.py
   decode.py
+  dataset.py
+  collator.py
+  token.py
+  agent/
 utils/
   struct.py
   metric.py
@@ -37,6 +37,8 @@ scripts/
   eval.py
   run.py
 ```
+
+`models/` contains the model, tokenizer, dataset, collator, masking, and decode code. `scripts/data.py` is the data preparation CLI. `dataset/` is a data-file directory, not a Python package. Future agent-related code should live under `models/agent`; it is currently an empty package and no agent framework is implemented.
 
 ## Data Preparation
 

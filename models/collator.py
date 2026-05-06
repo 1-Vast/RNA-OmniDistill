@@ -1,11 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import random
 from typing import Dict, List, Sequence
 
 import torch
 
-from data.token import RNAOmniTokenizer
+from models.token import RNAOmniTokenizer
 from models.mask import (
     motif_span_mask_positions,
     pair_aware_mask_positions,

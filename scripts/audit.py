@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
@@ -12,9 +12,9 @@ from torch.utils.data import DataLoader
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from data.collator import RNAOmniCollator
-from data.dataset import RNAOmniDataset
-from data.token import RNAOmniTokenizer
+from models.collator import RNAOmniCollator
+from models.dataset import RNAOmniDataset
+from models.token import RNAOmniTokenizer
 from main import build_model, load_config, loss_from_batch, move_batch_to_device, resolve_device
 from models.omni import _pair_loss_mask
 from utils.struct import parse_dot_bracket
@@ -45,7 +45,15 @@ OLD_SCRIPT_FILES = [
 ]
 
 OLD_MODEL_FILES = ["models/rna_omnidiffusion.py", "models/masking.py", "models/decoding.py"]
-OLD_TOOL_FILES = ["data/tokenizer.py", "utils/structure.py", "utils/metrics.py"]
+OLD_TOOL_FILES = [
+    "data/__init__.py",
+    "data/collator.py",
+    "data/dataset.py",
+    "data/token.py",
+    "data/tokenizer.py",
+    "utils/structure.py",
+    "utils/metrics.py",
+]
 OLD_CONFIG_FILES = [
     "config/archive.yaml",
     "config/config.yaml",
@@ -84,6 +92,11 @@ OLD_PATTERNS = [
     "evaluate_agent_potential",
     "rna_omnidiffusion",
     "data.tokenizer",
+    "from data.",
+    "import data.",
+    "data/dataset.py",
+    "data/collator.py",
+    "data/token.py",
     "utils.structure",
     "utils.metrics",
     "models.masking",
@@ -286,7 +299,7 @@ def run_profile(args: argparse.Namespace) -> None:
 
 
 def run_names(args: argparse.Namespace) -> None:
-    roots = [Path("main.py"), Path("config"), Path("data"), Path("models"), Path("utils"), Path("scripts"), Path("README.md"), Path("INDEX.md")]
+    roots = [Path("main.py"), Path("config"), Path("models"), Path("utils"), Path("scripts"), Path("README.md"), Path("INDEX.md")]
     bad = []
     for root in roots:
         paths = [root] if root.is_file() else [p for p in root.rglob("*") if p.is_file()]
@@ -314,7 +327,7 @@ def run_names(args: argparse.Namespace) -> None:
 
 
 def iter_project_text_files() -> list[Path]:
-    roots = [Path("main.py"), Path("config"), Path("data"), Path("models"), Path("utils"), Path("scripts"), Path("README.md"), Path("INDEX.md")]
+    roots = [Path("main.py"), Path("config"), Path("models"), Path("utils"), Path("scripts"), Path("README.md"), Path("INDEX.md")]
     files: list[Path] = []
     for root in roots:
         if root.is_file():
@@ -349,6 +362,23 @@ def run_clean(args: argparse.Namespace) -> None:
         warnings.append("legacy files still exist")
     if pattern_hits:
         warnings.append("legacy references still exist")
+    top_data = Path("data")
+    if top_data.exists():
+        warnings.append("top-level data Python package still exists")
+    if not Path("dataset").exists():
+        warnings.append("dataset data directory is missing")
+    if not Path("scripts/data.py").exists():
+        warnings.append("scripts/data.py is missing")
+    agent_files = [
+        path
+        for path in Path("models/agent").rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+    ] if Path("models/agent").exists() else []
+    nonempty_agent = [str(path) for path in agent_files if path.name != "__init__.py" or path.read_text(encoding="utf-8", errors="replace").strip()]
+    if not Path("models/agent/__init__.py").exists():
+        warnings.append("models/agent empty package is missing")
+    if nonempty_agent:
+        warnings.append("models/agent contains non-empty implementation files")
     status = "PASS" if not warnings else "FAIL"
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -358,6 +388,10 @@ def run_clean(args: argparse.Namespace) -> None:
         "remaining_legacy_files": remaining_files,
         "kept_legacy_files": KEEP_FILES,
         "remaining_references": pattern_hits,
+        "top_level_data_package_exists": top_data.exists(),
+        "dataset_dir_exists": Path("dataset").exists(),
+        "scripts_data_cli_exists": Path("scripts/data.py").exists(),
+        "nonempty_agent_files": nonempty_agent,
         "warnings": warnings,
         "recommended_next_command": "conda run -n DL python scripts\\run.py ablate --config config/fixed.yaml --only full nopair nonuss random --device cuda --decode nussinov --bench_workers 8 --bench_profile --bench_resume",
     }

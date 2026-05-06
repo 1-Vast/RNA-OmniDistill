@@ -16,7 +16,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from data.dataset import RNAOmniDataset
+from models.dataset import RNAOmniDataset
 from main import build_model, load_checkpoint, load_config, resolve_device
 from models.decode import (
     GREEDY_DECODE_WARNING,

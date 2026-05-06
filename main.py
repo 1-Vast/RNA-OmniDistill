@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
@@ -14,9 +14,9 @@ import yaml
 from torch.optim import AdamW
 from torch.utils.data import BatchSampler, DataLoader, Sampler, Subset
 
-from data.collator import RNAOmniCollator
-from data.dataset import RNAOmniDataset
-from data.token import RNAOmniTokenizer
+from models.collator import RNAOmniCollator
+from models.dataset import RNAOmniDataset
+from models.token import RNAOmniTokenizer
 from models.decode import generate_sequence_invfold, generate_structure_seq2struct
 from models.omni import RNAOmniDiffusion, compute_omni_loss
 from utils.metric import base_pair_f1, evaluate_structures
