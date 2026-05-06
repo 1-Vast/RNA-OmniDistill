@@ -118,18 +118,26 @@ def _llm_call(provider: str, prompt: str, env_vars: dict) -> Optional[str]:
         else:
             print(f"  API error {resp.status_code}: {resp.text[:200]}")
             return None
-    elif provider in ["openai", "gemini"]:
+    elif provider in ["openai", "deepseek", "gemini"]:
         import requests
-        base = "https://api.openai.com/v1" if provider == "openai" else "https://generativelanguage.googleapis.com/v1beta"
-        resp = requests.post(
-            f"{base}/chat/completions" if provider == "openai" else f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={env_vars.get('LLM_API_KEY','')}",
+        if provider == "deepseek":
+            base = env_vars.get("LLM_BASE_URL", "https://api.deepseek.com/v1")
+        elif provider == "openai":
+            base = "https://api.openai.com/v1"
+        else:
+            base = "https://generativelanguage.googleapis.com/v1beta"
+        if provider == "gemini":
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={env_vars.get('LLM_API_KEY','')}"
+        else:
+            url = f"{base}/chat/completions"
+        resp = requests.post(url,
             headers={"Authorization": f"Bearer {env_vars.get('LLM_API_KEY','')}", "Content-Type": "application/json"},
             json={"model": env_vars.get("LLM_MODEL","gpt-4o-mini"), "messages": [{"role":"user","content":prompt}], "temperature": float(env_vars.get("LLM_TEMPERATURE", 0.1))},
             timeout=60
         )
         if resp.status_code == 200:
             data = resp.json()
-            return data["choices"][0]["message"]["content"] if provider == "openai" else data.get("candidates",[{}])[0].get("content",{}).get("parts",[{}])[0].get("text","")
+            return data["choices"][0]["message"]["content"] if provider != "gemini" else data.get("candidates",[{}])[0].get("content",{}).get("parts",[{}])[0].get("text","")
         return None
     return None
 

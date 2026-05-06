@@ -232,3 +232,56 @@ python scripts/run.py foundation --directions external multitask --device cuda -
 - `.env` is gitignored and must NOT be committed.
 - API keys must NOT appear in code, logs, or benchmark outputs.
 - LLM is NEVER called during benchmark inference.
+
+
+## Config Naming (Current Mainline)
+
+| Config | Role | pairrefine | masking | Status |
+|---|---|---|---|---|
+| `candidate.yaml` | Best candidate model | true | false | **current best** |
+| `fixed.yaml` | Default alias of candidate | true | false | active |
+| `oldbase.yaml` | Historical baseline | false | true | reference |
+| `candidate_norefine.yaml` | No pairrefine control | false | false | control |
+| `candidate_oldmask.yaml` | Old masking control | true | true | control |
+
+Archived (non-mainline): `config/archive_failed/` contains precision/conflict-loss experiments and semantic ablation configs. These are retained for reproducibility but are NOT part of the main pipeline.
+
+## Key Design Decisions
+
+- **pairrefine**: 2D Conv2d residual refinement → primary effective module (+7.2% F1)
+- **No masking variants**: disabled in candidate/fixed (masking hurts on ArchiveII, -17.2% F1)
+- **Strict Nussinov**: final benchmark decoding (legal non-crossing structures)
+- **Conflict loss**: rejected at all tested magnitudes (harms performance)
+- **Token-only decode**: failure mode (valid_rate = 0.0000)
+- **Greedy decode**: probe only, NOT a final metric
+
+## External Generalization (Direction A)
+
+```bash
+# Download external datasets
+python scripts/dataset.py download --name bprna --out dataset/raw/bprna
+
+# Prepare and split
+python scripts/dataset.py prepare --input dataset/raw/bprna --out dataset/processed/bprna/clean.jsonl
+python scripts/dataset.py split --input dataset/processed/bprna/clean.jsonl --out dataset/processed/bprna_family --mode family
+
+# Run external benchmark
+python scripts/run.py external --configs config/external_bprna_candidate.yaml config/external_bprna_norefine.yaml config/external_bprna_oldbase.yaml --dataset bprna --split family --device cuda --decode nussinov
+```
+
+## Multi-task (Direction B, quick only)
+
+```bash
+python scripts/run.py multitask --config config/candidate.yaml --tasks seq2struct invfold inpaint --device cuda --quick
+```
+
+## LLM Annotation (Direction C, no-API smoke only)
+
+```bash
+python scripts/semantic.py annotate --input data.jsonl --out semantic.jsonl --provider none
+python scripts/semantic.py annotate_tasks --input data.jsonl --out task_semantic.jsonl --provider none
+python scripts/semantic.py audit --input semantic.jsonl --out outputs/audit
+```
+
+LLM API is optional. Real API calls require `.env` with provider credentials.
+Training, validation, and benchmark inference NEVER call LLM API.

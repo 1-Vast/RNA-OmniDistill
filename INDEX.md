@@ -27,3 +27,12 @@
 - `scripts/eval.py`: benchmark, export, analyze, diagnose, compare; supports strict Nussinov, staged logits, multiprocessing decode, decode-only scans, and greedy probing.
 - `scripts/run.py`: potential, ablate, and sweep workflows.
 - sandbox/precision/: precision probes (pairrefine validated, conflict loss rejected).
+
+
+## Config Naming
+- config/candidate.yaml: best candidate (pairrefine=true, masking=false)
+- config/fixed.yaml: alias of candidate
+- config/oldbase.yaml: historical baseline (pairrefine=false, masking=true)
+- config/candidate_norefine.yaml: no pairrefine control
+- config/candidate_oldmask.yaml: old masking control
+- config/archive_failed/: archived non-mainline configs (precision, conflict-loss, semantic ablation)
