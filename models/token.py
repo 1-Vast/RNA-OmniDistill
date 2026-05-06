@@ -29,6 +29,27 @@ class RNAOmniTokenizer:
         "<TASK_MOTIF_CONTROL>",
     ]
     motif_tokens = ["<STEM>", "<HAIRPIN>", "<BULGE>", "<INTERNAL_LOOP>", "<MULTI_LOOP>"]
+
+    # Semantic condition tokens (optional, only when semantic.enabled=True)
+    semantic_condition_tokens = [
+        "<FAMILY_TYPE=tRNA>", "<FAMILY_TYPE=riboswitch>", "<FAMILY_TYPE=ribozyme>",
+        "<FAMILY_TYPE=miRNA>", "<FAMILY_TYPE=snRNA>", "<FAMILY_TYPE=snoRNA>",
+        "<FAMILY_TYPE=rRNA>", "<FAMILY_TYPE=tmRNA>", "<FAMILY_TYPE=lncRNA>",
+        "<FAMILY_TYPE=unknown>",
+        "<MOTIF=hairpin>", "<MOTIF=stem_loop>", "<MOTIF=bulge>",
+        "<MOTIF=internal_loop>", "<MOTIF=multiloop>", "<MOTIF=pseudoknot>",
+        "<MOTIF=unknown>",
+        "<BIAS=stem_rich>", "<BIAS=loop_rich>", "<BIAS=cloverleaf>",
+        "<BIAS=long_range_pairing>", "<BIAS=balanced>", "<BIAS=unknown>",
+        "<HINT=STEM_RICH>", "<HINT=CONSERVED_LOOP>", "<HINT=LONG_RANGE>",
+        "<HINT=COMPACT>", "<HINT=UNKNOWN>",
+        "<MASK_REGION=stem>", "<MASK_REGION=hairpin_loop>", "<MASK_REGION=internal_loop>",
+        "<MASK_REGION=bulge>", "<MASK_REGION=multiloop>", "<MASK_REGION=random>",
+        "<REPAIR_TARGET=conserved_loop>", "<REPAIR_TARGET=stem>", "<REPAIR_TARGET=motif>",
+        "<REPAIR_TARGET=unknown>",
+        "<CONSTRAINT=preserve_stem>", "<CONSTRAINT=preserve_loop>",
+        "<CONSTRAINT=maintain_pairing>", "<CONSTRAINT=UNKNOWN>",
+    ]
     family_other = "<FAMILY_OTHER>"
 
     task_name_to_token = {
@@ -44,6 +65,7 @@ class RNAOmniTokenizer:
             self.special_tokens
             + self.task_tokens
             + self.motif_tokens
+            + self.semantic_condition_tokens
             + [self.family_other]
             + self.sequence_tokens
             + self.structure_tokens
@@ -136,6 +158,10 @@ class RNAOmniTokenizer:
     def token_id(self, token: str) -> int:
         return self.token_to_id[token]
 
+    def semantic_token(self, prefix: str, value: str, default: str = "UNKNOWN") -> str:
+        token = f"<{prefix}={value}>"
+        return token if token in self.token_to_id else f"<{prefix}={default}>"
+
     def to_dict(self) -> dict:
         return {
             "id_to_token": self.id_to_token,
@@ -149,4 +175,4 @@ class RNAOmniTokenizer:
         tokenizer.id_to_token = list(state["id_to_token"])
         tokenizer.family_to_token = dict(state.get("family_to_token", {}))
         return tokenizer
-
+

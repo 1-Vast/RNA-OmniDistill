@@ -190,3 +190,45 @@ Candidate is stable.
 3. Token-only decode fails (valid_rate = 0.0000).
 4. Greedy decode is a probe only; strict Nussinov is the final metric.
 5. Conflict loss is harmful at all tested magnitudes.
+
+## LLM API (Optional)
+
+LLM API is used only for **offline semantic/task annotation**. It is NOT required
+for training, validation, testing, or benchmark inference.
+
+### When API is needed
+- **Direction A (External Generalization)**: No API needed. Provider=none runs rule-based annotation.
+- **Direction B (Multi-task Modeling)**: No API needed. Provider=none runs rule-based templates.
+- **Direction C (Semantic Token Distillation)**: API needed only for real LLM annotation.
+
+### Setup
+```bash
+cp .env.example .env
+# Edit .env with your API credentials
+```
+
+### Providers
+- `none`: Rule-based templates (default, no API)
+- `ark`: Ark/Volces API
+- `openai`: OpenAI-compatible API
+- `gemini`: Google Gemini API
+
+### Usage
+```bash
+# Semantic annotation (no API)
+python scripts/semantic.py annotate --input data.jsonl --out semantic.jsonl --provider none --max_samples 64
+
+# Task annotation (no API)
+python scripts/semantic.py annotate_tasks --input data.jsonl --out task_semantic.jsonl --provider none --max_samples 64
+
+# Audit
+python scripts/semantic.py audit --input semantic.jsonl --out outputs/semantic_audit
+
+# Foundation workflow (all directions, quick mode)
+python scripts/run.py foundation --directions external multitask --device cuda --quick
+```
+
+### Security
+- `.env` is gitignored and must NOT be committed.
+- API keys must NOT appear in code, logs, or benchmark outputs.
+- LLM is NEVER called during benchmark inference.
