@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -379,6 +380,104 @@ def read_analysis(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def metric_row(variant: str, out: Path) -> dict:
+    benchmark = read_json(out / "benchmark.json")
+    if not benchmark:
+        raise SystemExit(f"Missing benchmark.json for variant {variant}: {out / 'benchmark.json'}")
+    metrics = benchmark.get("overall", {}).get("model", {})
+    avg_true = as_float(metrics.get("avg_true_pair_count"))
+    pair_ratio = as_float(metrics.get("avg_pred_pair_count")) / max(1e-8, avg_true)
+    return {
+        "variant": variant,
+        "decode_method": benchmark.get("decode_method", "unknown"),
+        "pair_head_available": benchmark.get("pair_head_available"),
+        "pair_f1": as_float(metrics.get("pair_f1")),
+        "pair_precision": as_float(metrics.get("pair_precision")),
+        "pair_recall": as_float(metrics.get("pair_recall")),
+        "valid_structure_rate": as_float(metrics.get("valid_structure_rate")),
+        "all_dot_ratio": as_float(metrics.get("all_dot_ratio")),
+        "pair_count_ratio": pair_ratio,
+        "benchmark_seconds": as_float(benchmark.get("benchmark_seconds")),
+    }
+
+
+def write_ablate_summary(rows: list[dict], root: Path, quick: bool) -> None:
+    prefix = "quick_" if quick else ""
+    json_path = root / f"{prefix}summary.json"
+    csv_path = root / f"{prefix}summary.csv"
+    md_path = root / f"{prefix}summary.md"
+    json_path.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    lines = [
+        "| Variant | Decode Method | Pair F1 | Precision | Recall | Valid | All-dot | Pair Ratio | Time |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for row in rows:
+        lines.append(
+            f"| {row['variant']} | {row['decode_method']} | {row['pair_f1']:.4f} | "
+            f"{row['pair_precision']:.4f} | {row['pair_recall']:.4f} | {row['valid_structure_rate']:.4f} | "
+            f"{row['all_dot_ratio']:.4f} | {row['pair_count_ratio']:.4f} | {row['benchmark_seconds']:.2f} |"
+        )
+    md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_ablate_decision(rows: list[dict], root: Path) -> None:
+    by_name = {row["variant"]: row for row in rows}
+    full = by_name["full"]
+    delta_nopair = full["pair_f1"] - by_name["nopair"]["pair_f1"]
+    delta_nonuss = full["pair_f1"] - by_name["nonuss"]["pair_f1"]
+    delta_random = full["pair_f1"] - by_name["random"]["pair_f1"]
+    over = "none"
+    if full["pair_count_ratio"] > 2.0:
+        over = "severe over-pairing"
+    elif full["pair_count_ratio"] > 1.5:
+        over = "mild over-pairing"
+    fallback_explicit = by_name["nopair"]["decode_method"] == "tokenfallback" and by_name["nonuss"]["decode_method"] in {"token", "greedyfallback"}
+    fallback_valid = (
+        fallback_explicit
+        and by_name["nopair"]["valid_structure_rate"] >= 0.95
+        and by_name["nonuss"]["valid_structure_rate"] >= 0.95
+    )
+    paper_ready = fallback_valid and over == "none"
+    if fallback_valid:
+        fallback_text = "strictly comparable"
+    elif fallback_explicit:
+        fallback_text = "explicit but invalid; use nopair/nonuss only as failure-mode diagnostics"
+    else:
+        fallback_text = "not comparable"
+    lines = [
+        "# Core Ablation Decision",
+        "",
+        f"- delta_nopair: {delta_nopair:.4f}",
+        f"- delta_nonuss: {delta_nonuss:.4f}",
+        f"- delta_random: {delta_random:.4f}",
+        "",
+        f"- Pair head contribution: {'clear' if delta_nopair > 0.03 else 'weak'}",
+        f"- Nussinov contribution: {'clear' if delta_nonuss > 0.10 or by_name['nonuss']['valid_structure_rate'] < full['valid_structure_rate'] - 0.05 else 'weak'}",
+        f"- Masking contribution: {'clear' if delta_random > 0.02 else 'weak'}",
+        f"- Over-pairing: {over} (full pair_count_ratio={full['pair_count_ratio']:.4f})",
+        f"- Fallback validity: {fallback_text}",
+        "",
+        "## Notes",
+        "",
+        "- `nopair` uses tokenfallback and has no pair head; it does not create dummy pair logits.",
+        "- `nonuss` removes the strict DP constraint and is not a final strict structure metric.",
+        "- If `nonuss` falls back to greedyfallback, treat it only as a constraint-removal failure mode.",
+        "",
+        f"Final recommendation: {'can enter the paper ablation table with fallback caveats' if paper_ready else 'do not use directly as a strict paper table without another diagnostic pass'}",
+    ]
+    if over == "mild over-pairing":
+        lines.append("Recommended next config if retuning is needed: `config/mild.yaml`.")
+    elif over == "severe over-pairing":
+        lines.append("Recommended next config if retuning is needed: `config/strict.yaml`.")
+    elif not fallback_valid:
+        lines.append("Recommended next config is not a training config; inspect token fallback validity first.")
+    (root / "decision.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def run_sweep(args: argparse.Namespace) -> None:
     Path("outputs/sweep").mkdir(parents=True, exist_ok=True)
     rows = []
@@ -495,6 +594,8 @@ def run_potential(args: argparse.Namespace) -> None:
 
 
 def run_ablate(args: argparse.Namespace) -> None:
+    root = Path("outputs/ablate")
+    root.mkdir(parents=True, exist_ok=True)
     names = args.only or ["full", "nonuss", "random"]
     for name in names:
         base = load_yaml(Path(args.config))
@@ -507,7 +608,15 @@ def run_ablate(args: argparse.Namespace) -> None:
         path = Path("outputs/ablate") / name / "config.yaml"
         write_yaml(path, base)
         out = output_dir_from_config(path)
+        out.mkdir(parents=True, exist_ok=True)
         train_cmd = [sys.executable, "main.py", "train", "--config", str(path), "--device", args.device]
+        if args.quick:
+            train_cmd.extend(["--train_subset", "32", "--max_steps", "8"])
+        decode = args.decode
+        if name == "nopair":
+            decode = "tokenfallback"
+        elif name == "nonuss":
+            decode = "token"
         bench_cmd = [
             sys.executable,
             "scripts/eval.py",
@@ -523,24 +632,58 @@ def run_ablate(args: argparse.Namespace) -> None:
             "--device",
             args.device,
             "--decode",
-            args.decode,
+            decode,
         ]
+        if args.quick:
+            bench_cmd.extend(["--limit", "32"])
         if args.bench_workers is not None:
             bench_cmd.extend(["--workers", str(args.bench_workers)])
         if args.bench_profile:
             bench_cmd.append("--profile")
         if args.bench_resume:
             bench_cmd.append("--resume")
+        if name in {"full", "random"} and decode == "nussinov":
+            bench_cmd.append("--stage_logits")
         if args.dry_run:
             print(" ".join(train_cmd))
             print(" ".join(bench_cmd))
             print(" ".join([sys.executable, "scripts/eval.py", "analyze", "--log", str(out / "trainlog.jsonl"), "--out", str(out / "analysis.json")]))
             print(" ".join([sys.executable, "scripts/eval.py", "diagnose", "--pred", str(out / "predictions.jsonl"), "--out", str(out / "diagnosis.json")]))
             continue
-        run_cmd(train_cmd)
+        reuse_full = name == "full" and not args.quick and Path("outputs/fixed/best.pt").exists()
+        if reuse_full:
+            (out / "reuse_note.json").write_text(
+                json.dumps(
+                    {
+                        "source_ckpt": "outputs/fixed/best.pt",
+                        "source_benchmark": "outputs/fixed/benchmark.json",
+                        "full_retrained": False,
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            bench_cmd[bench_cmd.index("--ckpt") + 1] = "outputs/fixed/best.pt"
+            trainlog = Path("outputs/fixed/trainlog.jsonl")
+            if trainlog.exists():
+                shutil.copyfile(trainlog, out / "trainlog.jsonl")
+        else:
+            run_cmd(train_cmd)
         run_cmd(bench_cmd)
         run_cmd([sys.executable, "scripts/eval.py", "analyze", "--log", str(out / "trainlog.jsonl"), "--out", str(out / "analysis.json")])
         run_cmd([sys.executable, "scripts/eval.py", "diagnose", "--pred", str(out / "predictions.jsonl"), "--out", str(out / "diagnosis.json")])
+        benchmark = read_json(out / "benchmark.json")
+        if "decode_method" not in benchmark:
+            raise SystemExit(f"benchmark.json for {name} is missing decode_method")
+    if args.dry_run:
+        return
+    rows = [metric_row(name, output_dir_from_config(Path("outputs/ablate") / name / "config.yaml")) for name in names]
+    write_ablate_summary(rows, root, args.quick)
+    if not args.quick:
+        required = {"full", "nopair", "nonuss", "random"}
+        if required.issubset(set(names)):
+            write_ablate_decision(rows, root)
 
 
 def main() -> None:
@@ -580,6 +723,7 @@ def main() -> None:
     ablate.add_argument("--bench_profile", action="store_true")
     ablate.add_argument("--bench_resume", action="store_true")
     ablate.add_argument("--dry_run", action="store_true")
+    ablate.add_argument("--quick", action="store_true")
     ablate.set_defaults(func=run_ablate)
     args = parser.parse_args()
     args.func(args)

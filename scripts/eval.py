@@ -151,6 +151,33 @@ def forward_pair_logits(model, tokenizer, samples: list[dict], device: torch.dev
     return pair_logits[:, :max_len, :max_len]
 
 
+def forward_token_structures(model, tokenizer, samples: list[dict], device: torch.device) -> tuple[list[str], float]:
+    batch = build_seq2struct_batch(tokenizer, samples, device)
+    allowed_ids = torch.tensor([tokenizer.token_id(token) for token in tokenizer.structure_tokens], dtype=torch.long, device=device)
+    start = time.time()
+    with torch.no_grad():
+        outputs = model(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            segment_ids=batch["segment_ids"],
+            task_ids=batch["task_ids"],
+            time_steps=batch["time_steps"],
+            seq_positions=batch["seq_positions"],
+        )
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    forward_seconds = time.time() - start
+    structs: list[str] = []
+    struct_logits = outputs["structure_logits"]
+    for idx, sample in enumerate(samples):
+        length = int(sample["length"])
+        positions = batch["struct_positions"][idx, :length]
+        restricted = struct_logits[idx, positions].index_select(-1, allowed_ids)
+        pred_ids = allowed_ids[restricted.argmax(dim=-1)].detach().cpu().tolist()
+        structs.append("".join(tokenizer.decode(pred_ids)))
+    return structs, forward_seconds
+
+
 def stage_logits(
     model,
     tokenizer,
@@ -549,6 +576,7 @@ def finalize_benchmark(
         "decode_method": decode_method,
         "partial": bool(args.limit or args.samples),
         "samples": len(rows),
+        "pair_head_available": bool(timing.get("pair_head_available", decode_method not in {"token", "tokenfallback"})),
         "decode_warning": GREEDY_DECODE_WARNING if decode_method == "greedy" else "",
         "skipped_crossing_pairs_total": int(sum(skipped)),
         "skipped_crossing_pairs_avg": float(sum(skipped) / max(1, len(skipped))),
@@ -567,6 +595,7 @@ def finalize_benchmark(
         "split": args.split,
         "input_jsonl": str(split_path),
         "decode_method": decode_method,
+        "pair_head_available": summary["pair_head_available"],
         "total_samples": len(dataset_samples),
         "completed_samples": len(rows),
         "partial": bool(args.limit or args.samples),
@@ -634,7 +663,15 @@ def run_bench(args: argparse.Namespace) -> None:
     if limit:
         dataset.samples = dataset.samples[: int(limit)]
 
-    decode_method = "greedy" if args.fast else args.decode
+    requested_decode = "greedy" if args.fast else args.decode
+    ablation = config.get("ablation", {})
+    pair_head_available = bool(ablation.get("use_pair_head", True) and config.get("model", {}).get("use_pair_head", True))
+    if requested_decode == "nussinov" and not pair_head_available:
+        decode_method = "tokenfallback"
+    elif requested_decode == "nussinov" and not bool(config.get("decoding", {}).get("use_nussinov", True)):
+        decode_method = "token"
+    else:
+        decode_method = requested_decode
     batch_size = int(args.batch or config.get("training", {}).get("batch_size", 8))
     out_dir = Path(args.out).parent if args.out else Path(config["training"]["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -648,7 +685,7 @@ def run_bench(args: argparse.Namespace) -> None:
     if args.gamma is not None:
         config.setdefault("decoding", {})["nussinov_gamma"] = float(args.gamma)
 
-    need_model = decode_method == "greedy" or not args.decode_only
+    need_model = decode_method in {"greedy", "token", "tokenfallback", "greedyfallback"} or not args.decode_only
     model = None
     if need_model:
         model = build_model(config, tokenizer, device)
@@ -691,6 +728,7 @@ def run_bench(args: argparse.Namespace) -> None:
                 "device": device.type,
                 "cuda": bool(device.type == "cuda"),
                 "gpu": torch.cuda.get_device_name(0) if device.type == "cuda" else "",
+                "pair_head_available": pair_head_available,
             }
         )
         finalize_benchmark(
@@ -752,7 +790,12 @@ def run_bench(args: argparse.Namespace) -> None:
             batch_items = remaining[start : start + batch_size]
             batch_indices = [idx for idx, _ in batch_items]
             batch_samples = [sample for _, sample in batch_items]
-            if decode_method == "greedy":
+            if decode_method in {"token", "tokenfallback"}:
+                assert model is not None
+                structs, elapsed = forward_token_structures(model, tokenizer, batch_samples, device)
+                forward_seconds += elapsed
+                skipped_crossing_counts.extend([0] * len(batch_samples))
+            elif decode_method == "greedy":
                 t0 = time.time()
                 assert model is not None
                 pair_logits = forward_pair_logits(model, tokenizer, batch_samples, device)
@@ -818,6 +861,7 @@ def run_bench(args: argparse.Namespace) -> None:
         "device": device.type,
         "cuda": bool(device.type == "cuda"),
         "gpu": torch.cuda.get_device_name(0) if device.type == "cuda" else "",
+        "pair_head_available": pair_head_available,
         "benchmark_seconds": total_seconds,
         "samples_per_sec": len(model_rows) / max(1e-8, total_seconds),
         "overall": {"model": summarize(model_rows), "all": summarize(all_rows), "random": summarize(random_rows)},
@@ -828,6 +872,7 @@ def run_bench(args: argparse.Namespace) -> None:
         "split": args.split,
         "input_jsonl": str(split_path),
         "decode_method": decode_method,
+        "pair_head_available": pair_head_available,
         "total_samples": len(dataset.samples),
         "completed_samples": len(model_rows),
         "partial": bool(limit),
@@ -953,7 +998,7 @@ def main() -> None:
     bench.add_argument("--out")
     bench.add_argument("--samples", type=int, help=argparse.SUPPRESS)
     bench.add_argument("--limit", type=int)
-    bench.add_argument("--decode", choices=["nussinov", "greedy"], default="nussinov")
+    bench.add_argument("--decode", choices=["nussinov", "greedy", "token", "tokenfallback", "greedyfallback"], default="nussinov")
     bench.add_argument("--batch", type=int)
     bench.add_argument("--fast", action="store_true")
     bench.add_argument("--profile", action="store_true")
