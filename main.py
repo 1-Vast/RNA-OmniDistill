@@ -330,7 +330,7 @@ def load_checkpoint(ckpt_path: str | Path, device: torch.device) -> tuple[Dict[s
     path = Path(ckpt_path)
     if not path.exists():
         raise FileNotFoundError(
-            f"Checkpoint not found: {path}. Run `python main.py train --config config/config.yaml` first, "
+            f"Checkpoint not found: {path}. Run `python main.py train --config config/fixed.yaml` first, "
             "or pass an existing --ckpt path."
         )
     try:

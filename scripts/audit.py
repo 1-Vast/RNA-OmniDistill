@@ -20,18 +20,90 @@ from models.omni import _pair_loss_mask
 from utils.struct import parse_dot_bracket
 
 
+OLD_SCRIPT_FILES = [
+    "scripts/run_potential_suite.py",
+    "scripts/run_benchmark.py",
+    "scripts/prepare_rna_dataset.py",
+    "scripts/check_dataset.py",
+    "scripts/make_splits.py",
+    "scripts/run_realdata_smoke.py",
+    "scripts/export_predictions.py",
+    "scripts/analyze_training.py",
+    "scripts/diagnose_predictions.py",
+    "scripts/compare_benchmarks.py",
+    "scripts/compare_core_results.py",
+    "scripts/compare_ablations.py",
+    "scripts/run_core_experiments.py",
+    "scripts/run_ablations.py",
+    "scripts/run_pairfix_sweep.py",
+    "scripts/compare_pairfix_sweep.py",
+    "scripts/summarize_model_potential.py",
+    "scripts/evaluate_agent_potential.py",
+    "scripts/debug_pair_alignment.py",
+    "scripts/profile_runtime.py",
+    "scripts/smoke_test_rna_omni.py",
+]
+
+OLD_MODEL_FILES = ["models/rna_omnidiffusion.py", "models/masking.py", "models/decoding.py"]
+OLD_TOOL_FILES = ["data/tokenizer.py", "utils/structure.py", "utils/metrics.py"]
+OLD_CONFIG_FILES = [
+    "config/archive.yaml",
+    "config/config.yaml",
+    "config/config_archiveii.yaml",
+    "config/config_rnastralign512.yaml",
+    "config/config_external_archiveii.yaml",
+    "config/relaxed.yaml",
+    "config/pairfix.yaml",
+    "config/strong.yaml",
+    "config/ablate/hybrid.yaml",
+    "config/ablate/nocond.yaml",
+    "config/ablate/nomotif.yaml",
+    "config/ablate/nopairmask.yaml",
+    "config/ablate/pair.yaml",
+    "config/ablate/token.yaml",
+]
+
+OLD_PATTERNS = [
+    "run_potential_suite",
+    "run_benchmark",
+    "prepare_rna_dataset",
+    "check_dataset",
+    "make_splits",
+    "run_realdata_smoke",
+    "export_predictions",
+    "analyze_training",
+    "diagnose_predictions",
+    "compare_benchmarks",
+    "compare_core_results",
+    "compare_ablations",
+    "run_core_experiments",
+    "run_ablations",
+    "run_pairfix_sweep",
+    "compare_pairfix_sweep",
+    "summarize_model_potential",
+    "evaluate_agent_potential",
+    "rna_omnidiffusion",
+    "data.tokenizer",
+    "utils.structure",
+    "utils.metrics",
+    "models.masking",
+    "models.decoding",
+    "archiveii_full",
+    "pairfix_sweep",
+    "rna_omnidiffusion_v2",
+    "processed_archiveii",
+    "agent_potential",
+    "model_potential",
+]
+
+KEEP_FILES = [
+    "config/cpu.yaml: retained for CPU preflight and smoke checks",
+]
+
+
 def ensure_archive_paths(config: dict) -> None:
     data = config["data"]
-    target = Path(data["train_jsonl"]).parent
-    fallback = Path("dataset/processed_archiveii")
     if Path(data["train_jsonl"]).exists():
-        return
-    if fallback.exists():
-        target.mkdir(parents=True, exist_ok=True)
-        for name in ["train.jsonl", "val.jsonl", "test.jsonl"]:
-            src = fallback / name
-            if src.exists():
-                (target / name).write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
         return
     raise SystemExit("ArchiveII split files are missing. Run `python scripts/data.py split --input dataset/processed/archivecheck.jsonl --out dataset/archive --mode random` first.")
 
@@ -241,17 +313,96 @@ def run_names(args: argparse.Namespace) -> None:
         raise SystemExit("Name audit failed.")
 
 
+def iter_project_text_files() -> list[Path]:
+    roots = [Path("main.py"), Path("config"), Path("data"), Path("models"), Path("utils"), Path("scripts"), Path("README.md"), Path("INDEX.md")]
+    files: list[Path] = []
+    for root in roots:
+        if root.is_file():
+            files.append(root)
+            continue
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            if "__pycache__" in path.parts or path.suffix == ".pyc":
+                continue
+            if path.suffix.lower() not in {".py", ".md", ".yaml", ".yml", ".json"}:
+                continue
+            files.append(path)
+    return files
+
+
+def run_clean(args: argparse.Namespace) -> None:
+    missing_expected = OLD_SCRIPT_FILES + OLD_MODEL_FILES + OLD_TOOL_FILES + OLD_CONFIG_FILES
+    remaining_files = [item for item in missing_expected if Path(item).exists()]
+    pattern_hits: dict[str, list[str]] = {}
+    for path in iter_project_text_files():
+        if path == Path("scripts/audit.py"):
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for pattern in OLD_PATTERNS:
+            if pattern in text:
+                pattern_hits.setdefault(pattern, []).append(str(path))
+    warnings = []
+    if remaining_files:
+        warnings.append("legacy files still exist")
+    if pattern_hits:
+        warnings.append("legacy references still exist")
+    status = "PASS" if not warnings else "FAIL"
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    report = {
+        "status": status,
+        "removed_files": [item for item in missing_expected if not Path(item).exists()],
+        "remaining_legacy_files": remaining_files,
+        "kept_legacy_files": KEEP_FILES,
+        "remaining_references": pattern_hits,
+        "warnings": warnings,
+        "recommended_next_command": "conda run -n DL python scripts\\run.py ablate --config config/fixed.yaml --only full nopair nonuss random --device cuda --decode nussinov --bench_workers 8 --bench_profile --bench_resume",
+    }
+    (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    lines = [
+        "# Cleanup Audit",
+        "",
+        f"Status: **{status}**",
+        "",
+        "## Removed Files",
+        *[f"- {item}" for item in report["removed_files"]],
+        "",
+        "## Kept Legacy Files With Reason",
+        *[f"- {item}" for item in KEEP_FILES],
+        "",
+        "## Remaining Warnings",
+    ]
+    if warnings:
+        lines.extend(f"- {item}" for item in warnings)
+    else:
+        lines.append("- none")
+    if remaining_files:
+        lines += ["", "## Remaining Legacy Files", *[f"- {item}" for item in remaining_files]]
+    if pattern_hits:
+        lines += ["", "## Remaining Legacy References"]
+        for pattern, paths in sorted(pattern_hits.items()):
+            lines.append(f"- `{pattern}`: {', '.join(sorted(set(paths)))}")
+    lines += ["", "## Recommended Next Command", "", f"`{report['recommended_next_command']}`"]
+    (out / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"clean {status} -> {out / 'report.md'}")
+    if status != "PASS":
+        raise SystemExit("Cleanup audit failed.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Audit RNA-OmniDiffusion runs.")
     sub = parser.add_subparsers(dest="cmd", required=True)
     align = sub.add_parser("align")
-    align.add_argument("--config", default="config/archive.yaml")
+    align.add_argument("--config", default="config/fixed.yaml")
     align.add_argument("--batches", type=int, default=1)
     align.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     align.add_argument("--out", default="outputs/align")
     align.set_defaults(func=run_align)
     profile = sub.add_parser("profile")
-    profile.add_argument("--config", default="config/archive.yaml")
+    profile.add_argument("--config", default="config/fixed.yaml")
     profile.add_argument("--steps", type=int, default=2)
     profile.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     profile.add_argument("--out", default="outputs/profile")
@@ -259,6 +410,9 @@ def main() -> None:
     names = sub.add_parser("names")
     names.add_argument("--out", default="outputs/name")
     names.set_defaults(func=run_names)
+    clean = sub.add_parser("clean")
+    clean.add_argument("--out", default="outputs/clean")
+    clean.set_defaults(func=run_clean)
     args = parser.parse_args()
     args.func(args)
 

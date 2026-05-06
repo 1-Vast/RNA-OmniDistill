@@ -356,8 +356,6 @@ def quick_config(name: str, mode: str) -> Path:
         config["model"]["num_layers"] = 2
         config["model"]["num_heads"] = 4
         config["model"]["max_position_embeddings"] = 512
-        if name == "strong":
-            config["model"]["pairhidden"] = 64
         config.setdefault("decoding", {})
         config["decoding"]["num_steps"] = min(int(config["decoding"].get("num_steps", 32)), 4)
     else:
@@ -427,7 +425,7 @@ def run_sweep(args: argparse.Namespace) -> None:
 
 
 def run_potential(args: argparse.Namespace) -> None:
-    source_config = Path(args.config) if args.config else Path("config/archive.yaml" if args.set == "archive" else f"config/{args.set}.yaml")
+    source_config = Path(args.config) if args.config else Path("config/fixed.yaml" if args.set == "archive" else f"config/{args.set}.yaml")
     if not source_config.exists():
         raise SystemExit(f"Config does not exist: {source_config}")
     require_data(source_config)
@@ -502,11 +500,47 @@ def run_ablate(args: argparse.Namespace) -> None:
         base = load_yaml(Path(args.config))
         patch = load_yaml(Path("config/ablate") / f"{name}.yaml")
         base.setdefault("training", {}).update(patch.get("training", {}))
+        if "output_dir" in base["training"]:
+            base["training"]["out"] = base["training"]["output_dir"]
         base.setdefault("ablation", {}).update(patch.get("ablation", {}))
         base.setdefault("decoding", {}).update(patch.get("decoding", {}))
         path = Path("outputs/ablate") / name / "config.yaml"
         write_yaml(path, base)
-        run_cmd([sys.executable, "main.py", "train", "--config", str(path), "--device", args.device, "--train_subset", "32", "--max_steps", "8"])
+        out = output_dir_from_config(path)
+        train_cmd = [sys.executable, "main.py", "train", "--config", str(path), "--device", args.device]
+        bench_cmd = [
+            sys.executable,
+            "scripts/eval.py",
+            "bench",
+            "--config",
+            str(path),
+            "--ckpt",
+            str(out / "best.pt"),
+            "--split",
+            "test",
+            "--out",
+            str(out / "benchmark.json"),
+            "--device",
+            args.device,
+            "--decode",
+            args.decode,
+        ]
+        if args.bench_workers is not None:
+            bench_cmd.extend(["--workers", str(args.bench_workers)])
+        if args.bench_profile:
+            bench_cmd.append("--profile")
+        if args.bench_resume:
+            bench_cmd.append("--resume")
+        if args.dry_run:
+            print(" ".join(train_cmd))
+            print(" ".join(bench_cmd))
+            print(" ".join([sys.executable, "scripts/eval.py", "analyze", "--log", str(out / "trainlog.jsonl"), "--out", str(out / "analysis.json")]))
+            print(" ".join([sys.executable, "scripts/eval.py", "diagnose", "--pred", str(out / "predictions.jsonl"), "--out", str(out / "diagnosis.json")]))
+            continue
+        run_cmd(train_cmd)
+        run_cmd(bench_cmd)
+        run_cmd([sys.executable, "scripts/eval.py", "analyze", "--log", str(out / "trainlog.jsonl"), "--out", str(out / "analysis.json")])
+        run_cmd([sys.executable, "scripts/eval.py", "diagnose", "--pred", str(out / "predictions.jsonl"), "--out", str(out / "diagnosis.json")])
 
 
 def main() -> None:
@@ -538,9 +572,14 @@ def main() -> None:
     potential.add_argument("--scan")
     potential.set_defaults(func=run_potential)
     ablate = sub.add_parser("ablate")
-    ablate.add_argument("--config", default="config/archive.yaml")
+    ablate.add_argument("--config", default="config/fixed.yaml")
     ablate.add_argument("--only", nargs="*")
     ablate.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    ablate.add_argument("--decode", choices=["nussinov", "greedy"], default="nussinov")
+    ablate.add_argument("--bench_workers", type=int)
+    ablate.add_argument("--bench_profile", action="store_true")
+    ablate.add_argument("--bench_resume", action="store_true")
+    ablate.add_argument("--dry_run", action="store_true")
     ablate.set_defaults(func=run_ablate)
     args = parser.parse_args()
     args.func(args)

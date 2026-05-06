@@ -1,6 +1,0 @@
-﻿training:
-  output_dir: outputs/ablate/nomotif
-ablation:
-  use_motif_span_masking: false
-
-

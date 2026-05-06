@@ -1,7 +1,0 @@
-﻿training:
-  output_dir: outputs/ablate/nocond
-ablation:
-  use_motif_condition: false
-  use_family_condition: false
-
-

@@ -2,27 +2,24 @@
 
 - `main.py`: train, eval, infer, and smoke entrypoint.
 - `config/base.yaml`: toy/default configuration.
-- `config/orig.yaml`: strict original training plus original decoding baseline.
+- `config/orig.yaml`: original training plus original decoding baseline.
 - `config/relax.yaml`: original training plus relaxed decoding.
 - `config/fix.yaml`: pairfix training plus original decoding.
-- `config/fixed.yaml`: pairfix training plus relaxed decoding for the current full run.
-- `config/archive.yaml`: legacy ArchiveII alias kept for compatibility.
+- `config/fixed.yaml`: pairfix training plus relaxed decoding for the current main run.
 - `config/mild.yaml`, `config/strict.yaml`, `config/stable.yaml`: post-full intervention templates.
-- `config/relaxed.yaml`, `config/pairfix.yaml`, `config/strong.yaml`: legacy sweep configs.
 - `config/cpu.yaml`: small CPU preflight configuration.
 - `config/scan.json`: decode-only strict Nussinov threshold/gamma scan grid.
-- `config/ablate/`: compact ablation patches.
+- `config/ablate/`: core ablation patches: `full`, `nopair`, `nonuss`, `random`.
 - `data/dataset.py`: JSONL dataset.
 - `data/collator.py`: task sampling, masking, and pair labels.
 - `data/token.py`: RNA tokenizer.
 - `models/omni.py`: Transformer model, pair head, and loss.
 - `models/mask.py`: masking helpers.
-- `models/decode.py`: iterative decoding, strict Nussinov decoding, and decode helpers.
-- `models/decode.py`: also includes GPU batched greedy pair decoding for fast benchmark checks.
+- `models/decode.py`: iterative decoding, strict Nussinov decoding, staged-decode helpers, and greedy probe.
 - `utils/struct.py`: dot-bracket and motif utilities.
 - `utils/metric.py`: token and pair metrics.
 - `scripts/data.py`: fetch, prep, check, split.
 - `scripts/probe.py`: smoke, overfit, real-data probes.
-- `scripts/audit.py`: name, alignment, and runtime audits.
-- `scripts/eval.py`: benchmark, export, analyze, diagnose, compare; benchmark supports strict Nussinov, staged logits, multiprocessing decode, decode-only scans, and fast greedy probing.
-- `scripts/run.py`: potential, ablate, and sweep workflows with benchmark decode argument passthrough.
+- `scripts/audit.py`: clean, name, alignment, and runtime audits.
+- `scripts/eval.py`: benchmark, export, analyze, diagnose, compare; supports strict Nussinov, staged logits, multiprocessing decode, decode-only scans, and greedy probing.
+- `scripts/run.py`: potential, ablate, and sweep workflows.

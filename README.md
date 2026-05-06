@@ -1,6 +1,6 @@
 # RNA-OmniDiffusion
 
-Minimal masked discrete diffusion for RNA sequence, structure, motif, and family-conditioned modeling.
+Minimal masked discrete diffusion for RNA sequence and secondary-structure modeling.
 
 This repository intentionally stays small. It does not use RNA-FM, LoRA, external LLM calls, RNA 3D, ligand tasks, or protein tasks.
 
@@ -10,7 +10,6 @@ This repository intentionally stays small. It does not use RNA-FM, LoRA, externa
 main.py
 config/
   base.yaml
-  archive.yaml
   orig.yaml
   relax.yaml
   fix.yaml
@@ -18,7 +17,7 @@ config/
   mild.yaml
   strict.yaml
   stable.yaml
-  cpu.yaml
+  scan.json
   ablate/
 data/
   dataset.py
@@ -39,7 +38,7 @@ scripts/
   run.py
 ```
 
-## Data
+## Data Preparation
 
 JSONL records use:
 
@@ -47,7 +46,7 @@ JSONL records use:
 {"id":"RNA1","seq":"AUGGCU","struct":"((..))","family":"OTHER","motifs":[],"pairs":[[0,5],[1,4]],"length":6}
 ```
 
-Prepare ArchiveII:
+Prepare ArchiveII-style data:
 
 ```powershell
 python scripts/data.py fetch --set archive --out dataset/raw/archive
@@ -56,99 +55,83 @@ python scripts/data.py check --input dataset/processed/archive.jsonl --output da
 python scripts/data.py split --input dataset/processed/archivecheck.jsonl --out dataset/archive --mode random
 ```
 
-## Train
+## Smoke
 
 ```powershell
 python main.py smoke
-python main.py train --config config/archive.yaml --device cuda
-python main.py eval --config config/archive.yaml --ckpt outputs/archive/best.pt --device cuda
-python main.py infer --config config/archive.yaml --ckpt outputs/archive/best.pt --task seq2struct --seq AUGGCUACGU --device cuda
-```
-
-## Audit
-
-```powershell
+python scripts/audit.py clean --out outputs/clean
 python scripts/audit.py names --out outputs/name
-python scripts/audit.py align --config config/archive.yaml --batches 3 --device cuda --out outputs/align
-python scripts/audit.py profile --config config/archive.yaml --steps 10 --device cuda --out outputs/profile
 ```
 
-## Evaluate
+## Train Fixed
+
+`config/fixed.yaml` is the current main configuration: pairfix training plus relaxed strict Nussinov decoding.
 
 ```powershell
-python scripts/eval.py bench --config config/archive.yaml --ckpt outputs/archive/best.pt --split test --device cuda
-python scripts/eval.py bench --config config/fixed.yaml --ckpt outputs/fixed/best.pt --split test --device cuda --decode greedy --profile --resume
-python scripts/eval.py bench --config config/fixed.yaml --ckpt outputs/fixed/best.pt --split test --device cuda --decode nussinov --limit 8 --profile
+python main.py train --config config/fixed.yaml --device cuda
+```
+
+## Strict Benchmark
+
+Final structure metrics should use strict Nussinov decoding.
+
+```powershell
 python scripts/eval.py bench --config config/fixed.yaml --ckpt outputs/fixed/best.pt --split test --device cuda --decode nussinov --stage_logits --workers 8 --chunksize 2 --profile
-python scripts/eval.py bench --config config/fixed.yaml --ckpt outputs/fixed/best.pt --split test --device cuda --decode nussinov --decode_only --workers 8 --chunksize 2 --profile --scan config/scan.json
-python scripts/eval.py export --config config/archive.yaml --ckpt outputs/archive/best.pt --input dataset/archive/test.jsonl --out outputs/archive/pred.jsonl --device cuda
-python scripts/eval.py analyze --log outputs/archive/trainlog.jsonl --out outputs/archive/analysis.json
-python scripts/eval.py diagnose --pred outputs/archive/predictions.jsonl --out outputs/archive/diagnosis.json
-python scripts/eval.py compare --inputs outputs/archive/benchmark.json outputs/pairfix/benchmark.json --names archive pairfix --out outputs/compare
 ```
 
-## Experiments
-
-Quick sweep, for direction only:
-
-```powershell
-python scripts/run.py sweep --mode quick --device cuda
-```
-
-Full sweep:
-
-```powershell
-python scripts/run.py sweep --mode full --device cuda
-```
-
-ArchiveII full decision workflow:
-
-```powershell
-python scripts/run.py potential --config config/fixed.yaml --mode full --device cuda
-python scripts/run.py potential --config config/fixed.yaml --mode full --device cuda --decode greedy --bench_profile --bench_resume
-```
-
-Configuration semantics:
-
-- `config/orig.yaml`: original training and original decoding. This is the strict baseline.
-- `config/relax.yaml`: original training with relaxed Nussinov decoding only.
-- `config/fix.yaml`: pairfix training with original decoding.
-- `config/fixed.yaml`: pairfix training with relaxed decoding. This is the current main full-run candidate.
-- `config/archive.yaml`: legacy alias kept for compatibility; do not describe it as the strict baseline in reports.
-- `config/mild.yaml`, `config/strict.yaml`, and `config/stable.yaml`: intervention templates generated for post-full diagnosis. They are not run automatically.
-
-After `fixed` full completes, inspect:
-
-```powershell
-type outputs\fixed\full.md
-```
-
-Run core ablation only if `full.md` says:
+Outputs:
 
 ```text
-Decision: Run core ablation next.
+outputs/fixed/benchmark.json
+outputs/fixed/benchmark.csv
+outputs/fixed/predictions.jsonl
+outputs/fixed/benchmeta.json
+outputs/fixed/benchtime.json
+outputs/fixed/logits.pt
 ```
 
-Then use:
+## Decode Scan
+
+Decode-only scans reuse staged logits and do not retrain or modify labels.
 
 ```powershell
-conda run -n DL python scripts\run.py ablate --config config/fixed.yaml --only full nopair nonuss random --device cuda
+python scripts/eval.py bench --config config/fixed.yaml --ckpt outputs/fixed/best.pt --split test --device cuda --decode nussinov --decode_only --workers 8 --chunksize 2 --profile --scan config/scan.json
 ```
 
-Agent integration remains deferred. These scripts only train, evaluate, diagnose, and recommend safe next configurations.
+## Core Ablation
 
-Benchmark decoding:
+Run only after the strict full benchmark passes the pair-count and ranking checks.
 
-- `--decode nussinov` is the strict non-crossing path and remains the default.
-- `--decode greedy` is a fast GPU batched path for checking whether the pair head carries structural signal.
-- Greedy decoding is approximate. It may create crossing pairs before dot-bracket conversion; crossing pairs are skipped when exporting dot-bracket structures and counted in `benchmark.json`.
-- Final paper reporting should still include strict Nussinov results when feasible.
-- Strict Nussinov benchmark supports staged GPU logits with `--stage_logits`, CPU multiprocessing with `--workers`, and decode-only rescoring with `--decode_only`.
-- Decode-only threshold/gamma scans reuse `outputs/<run>/logits.pt` via `--scan config/scan.json`; they do not retrain or modify benchmark labels.
+```powershell
+python scripts/run.py ablate --config config/fixed.yaml --only full nopair nonuss random --device cuda --decode nussinov --bench_workers 8 --bench_profile --bench_resume
+```
+
+Dry-run the commands first:
+
+```powershell
+python scripts/run.py ablate --config config/fixed.yaml --only full nopair nonuss random --device cuda --decode nussinov --bench_workers 8 --dry_run
+```
+
+## Greedy Probe
+
+`--decode greedy` is retained only as a fast pair-head probe. It is approximate, can generate crossing candidates before dot-bracket conversion, and must not be used as the final paper metric.
+
+```powershell
+python scripts/eval.py bench --config config/fixed.yaml --ckpt outputs/fixed/best.pt --split test --device cuda --decode greedy --profile --resume
+```
+
+## Config Semantics
+
+- `config/orig.yaml`: original training and original decoding.
+- `config/relax.yaml`: original training with relaxed decoding only.
+- `config/fix.yaml`: pairfix training with original decoding.
+- `config/fixed.yaml`: pairfix training with relaxed decoding; current main configuration.
+- `config/mild.yaml`, `config/strict.yaml`, `config/stable.yaml`: intervention templates. They are not run automatically.
+- `config/cpu.yaml`: CPU preflight configuration.
 
 ## Current Limitations
 
 - No pseudoknot decoding by default.
 - No RNA 3D, ligand, or protein tasks.
-- Pair head diagnostics are still required before treating benchmark gains as reliable structure learning.
+- Greedy decoding is a probe only.
 - Quick runs are pipeline checks and are not paper conclusions.
