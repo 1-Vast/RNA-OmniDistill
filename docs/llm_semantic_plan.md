@@ -1,49 +1,61 @@
 # LLM Semantic Token — Plan and Status
 
-## Status: Pipeline Working, Rfam Pilot Positive
+## Status: Rfam Pilot Successful, Ready for Model Smoke
 
 ## Root Cause of Previous Failure
-- **ArchiveII/bpRNA metadata is sparse**: family=OTHER and empty description caused unknown_ratio=100%.
+- ArchiveII/bpRNA metadata sparse (family=OTHER, empty description) → **unknown_ratio=100%**.
 - LLM cannot infer biological function from bare sequence alone.
 
-## Solution: Rfam Metadata Distillation
-- Parse Rfam Stockholm GF metadata: DE (definition), CC (comment), WK (wikipedia), TP (type), CL (clan)
-- Extract structural statistics: pairing ratio, stem/hairpin counts, length bins
-- Use metadata-rich prompt with controlled ontology tokens
+## Solution: Rfam Metadata Distillation ✅
+- Parse Rfam Stockholm GF metadata: DE, CC, WK, TP, CL
+- Extract structural statistics: pairing ratio, stem/hairpin counts
+- Metadata-rich prompt with controlled ontology
 - Rule baseline vs LLM comparison
 
-## Rfam Pilot Results (128 samples)
+## Rfam Pilot Results (128 samples, DeepSeek)
 
-| Metric | Rule Baseline | LLM (DeepSeek) |
+| Metric | Rule Baseline | LLM | Winner |
+|---|---|---|---|
+| unknown_ratio (family_type) | 0% | 0% | Tie |
+| unknown_ratio (structure_bias) | 100% | 34% | **LLM** |
+| unknown_ratio (function_tag) | 93% | 8% | **LLM** |
+| valid_json_rate | 100% | 100% | Tie |
+| evidence_nonempty_rate | N/A | 100% | LLM |
+| constraint_hint | 100% UNKNOWN | 100% UNKNOWN | Tie |
+
+### Distribution (LLM, 128 records)
+| family_type | miRNA(111), bacterial_sRNA(11), cis_regulatory(6) |
+| structure_bias | loop_rich(67), unknown(44), low_structure(17) |
+| function_tag | regulatory(114), unknown(10), processing(4) |
+
+### Rule vs LLM Comparison
+| Field | Agreement | LLM Knows, Rule Unknown |
 |---|---|---|
-| unknown_ratio (family_type) | **0%** | **0%** |
-| valid_json_rate | 100% | 100% |
-| LLM adds value over rule | — | Richer diversity (function_tag: gene regulation, translational repressor, microRNA precursor) |
-| Agreement (family_type) | 73% | — |
+| family_type | 100% | 0 |
+| structure_bias | 34% | **84/128 (66%)** |
+| function_tag | 6% | **112/128 (88%)** |
 
-### Distribution Comparison
-
-| Field | Rule | LLM |
-|---|---|---|
-| family_type | miRNA(111), sRNA(11), cis(6) | miRNA(93), sRNA(11), microRNA(7) |
-| structure_bias | **unknown(128)** | hairpin(67), stem-loop(44) |
-| function_tag | **unknown(119)** | gene regulation(100), regulatory(8) |
-
-**LLM dramatically outperforms rules on structure_bias and function_tag** (128→0 unknown).
-
-## Rules (Must NOT Violate)
-- Do NOT call LLM during benchmark inference.
-- Do NOT use true structure in val/test prompts.
-- Do NOT treat LLM semantic as a current main contribution.
-- Do NOT commit `.env` or API keys.
+**LLM dramatically outperforms rules on structure_bias and function_tag.**
 
 ## Next Steps
-1. Run full Rfam semantic annotation (128→1000+ samples)
-2. Create semantic-conditioned model config
-3. Evaluate: no_semantic vs rule_semantic vs llm_semantic vs shuffled
+1. Scale annotation to 1000+ Rfam samples
+2. Run semantic-conditioned model smoke:
+   ```bash
+   python scripts/run.py semantic \
+     --base_config config/candidate.yaml \
+     --semantic_jsonl dataset/processed/rfam_semantic/semantic.api_pilot.normalized.jsonl \
+     --rule_jsonl dataset/processed/rfam_semantic/semantic.rule.normalized.jsonl \
+     --device cuda --decode nussinov --tag semantic_rfam_pilot --quick
+   ```
+3. Compare: no_semantic vs rule_semantic vs llm_semantic vs shuffled
 4. Test on family-disjoint split
-5. Low-data regime evaluation
-6. Motif-conditioned generation
+5. Low-data evaluation
+
+## Rules
+- LLM is **never called during benchmark inference**.
+- True structure is never in val/test prompts.
+- Semantic tokens are experimental, **not a current main contribution**.
+- `.env` is gitignored.
 
 ## Provider
-See `.env.example`. Currently using DeepSeek (deepseek-chat).
+DeepSeek (deepseek-chat). See `.env.example`.
