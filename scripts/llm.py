@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -158,6 +159,20 @@ def standalone_guard(args: argparse.Namespace, out: Path, dry_run: bool) -> Agen
     )
 
 
+def emit_agent_outputs(
+    args: argparse.Namespace,
+    out: Path,
+    stem: str,
+    result: dict[str, Any],
+    lines: list[str],
+    data: dict[str, Any],
+    prompt: str,
+    agent: RNAAnalysisAgent | None = None,
+) -> None:
+    llm = agent or make_agent(args)
+    write_rule_outputs(out, stem, result, lines, data, prompt, args.dry_run, llm, standalone_guard(args, out, args.dry_run))
+
+
 class AgentRuntimeGuard:
     def __init__(
         self,
@@ -233,7 +248,7 @@ def run_diagnose(args: argparse.Namespace) -> None:
     out = Path(args.out)
     agent = make_agent(args)
     data, prompt = agent.build_diagnose_prompt(require_dir(Path(args.run)))
-    write_rule_outputs(out, "diagnose", data, ["# Diagnose Prompt", "", prompt], data, prompt, args.dry_run, agent, standalone_guard(args, out, args.dry_run))
+    emit_agent_outputs(args, out, "diagnose", data, ["# Diagnose Prompt", "", prompt], data, prompt, agent)
 
 
 def run_schedule(args: argparse.Namespace) -> None:
@@ -241,21 +256,21 @@ def run_schedule(args: argparse.Namespace) -> None:
     agent = make_agent(args)
     config = require_file(Path(args.config)) if args.config else None
     data, prompt = agent.build_schedule_prompt(require_dir(Path(args.run)), config)
-    write_rule_outputs(out, "schedule", data, ["# Schedule Prompt", "", prompt], data, prompt, args.dry_run, agent, standalone_guard(args, out, args.dry_run))
+    emit_agent_outputs(args, out, "schedule", data, ["# Schedule Prompt", "", prompt], data, prompt, agent)
 
 
 def run_report(args: argparse.Namespace) -> None:
     out = Path(args.out)
     agent = make_agent(args)
     data, prompt = agent.build_report_prompt([require_file(Path(path)) for path in args.inputs], max_chars=args.max_chars)
-    write_rule_outputs(out, "report", data, ["# Report Prompt", "", prompt], data, prompt, args.dry_run, agent, standalone_guard(args, out, args.dry_run))
+    emit_agent_outputs(args, out, "report", data, ["# Report Prompt", "", prompt], data, prompt, agent)
 
 
 def run_auditdata(args: argparse.Namespace) -> None:
     out = Path(args.out)
     agent = make_agent(args)
     data, prompt = agent.build_auditdata_prompt([require_file(Path(path)) for path in args.inputs], max_rows=args.max_rows)
-    write_rule_outputs(out, "dataaudit", data, ["# Data Audit Prompt", "", prompt], data, prompt, args.dry_run, agent, standalone_guard(args, out, args.dry_run))
+    emit_agent_outputs(args, out, "dataaudit", data, ["# Data Audit Prompt", "", prompt], data, prompt, agent)
 
 
 def run_inspect(args: argparse.Namespace) -> None:
@@ -263,7 +278,7 @@ def run_inspect(args: argparse.Namespace) -> None:
     result = inspect_run_artifacts(Path(args.run))
     data, prompt = agent.build_inspect_prompt(result)
     out = Path(args.out)
-    write_rule_outputs(out, "inspect", result, inspect_markdown(result), data, prompt, args.dry_run, agent, standalone_guard(args, out, args.dry_run))
+    emit_agent_outputs(args, out, "inspect", result, inspect_markdown(result), data, prompt, agent)
 
 
 def run_trace(args: argparse.Namespace) -> None:
@@ -271,7 +286,7 @@ def run_trace(args: argparse.Namespace) -> None:
     result = trace_provenance(Path(args.config), Path(args.ckpt), Path(args.benchmark))
     data, prompt = agent.build_trace_prompt(result)
     out = Path(args.out)
-    write_rule_outputs(out, "trace", result, trace_markdown(result), data, prompt, args.dry_run, agent, standalone_guard(args, out, args.dry_run))
+    emit_agent_outputs(args, out, "trace", result, trace_markdown(result), data, prompt, agent)
 
 
 def run_compare(args: argparse.Namespace) -> None:
@@ -279,7 +294,7 @@ def run_compare(args: argparse.Namespace) -> None:
     result = compare_runs(Path(args.a), Path(args.b))
     data, prompt = agent.build_compare_prompt(result)
     out = Path(args.out)
-    write_rule_outputs(out, "compare", result, compare_markdown(result), data, prompt, args.dry_run, agent, standalone_guard(args, out, args.dry_run))
+    emit_agent_outputs(args, out, "compare", result, compare_markdown(result), data, prompt, agent)
 
 
 def run_case(args: argparse.Namespace) -> None:
@@ -287,7 +302,7 @@ def run_case(args: argparse.Namespace) -> None:
     result = case_analysis(Path(args.pred), top_bad=args.top_bad, top_good=args.top_good)
     out = Path(args.out)
     data, prompt = agent.build_case_prompt(result)
-    write_rule_outputs(out, "case_summary", result, case_markdown(result), data, prompt, args.dry_run, agent, standalone_guard(args, out, args.dry_run))
+    emit_agent_outputs(args, out, "case_summary", result, case_markdown(result), data, prompt, agent)
     with (out / "bad_cases.jsonl").open("w", encoding="utf-8") as handle:
         for row in result.get("bad_cases", []):
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -336,7 +351,7 @@ def run_doctor(args: argparse.Namespace) -> None:
         f"- should_change_model: {result['should_change_model']}",
         f"- should_update_paper_table: {result['should_update_paper_table']}",
     ]
-    write_rule_outputs(out, "doctor", result, lines, data, prompt, args.dry_run, agent, standalone_guard(args, out, args.dry_run))
+    emit_agent_outputs(args, out, "doctor", result, lines, data, prompt, agent)
 
 
 def normalize_root(path: Path) -> Path:
@@ -364,15 +379,29 @@ def safe_root(root: Path) -> bool:
     )
 
 
-def cleanup_reports(root: Path, keep: int = 10, dry_run: bool = False) -> dict[str, Any]:
+def validate_cleanup_request(root: Path, keep: int = 10) -> dict[str, Any]:
     original_keep = keep
     warnings = []
     if keep < 1:
         keep = 10
         warnings.append("keep < 1 normalized to 10")
-    if not safe_root(root):
-        report = {"root": str(root), "keep": original_keep, "normalized_keep": keep, "dry_run": dry_run, "status": "blocked", "errors": ["unsafe root"], "warnings": warnings, "kept_dirs": [], "removed_dirs": []}
-        return report
+    safe = safe_root(root)
+    return {
+        "root": str(root),
+        "keep": original_keep,
+        "normalized_keep": keep,
+        "safe": safe,
+        "status": "PASS" if safe else "blocked",
+        "warnings": warnings,
+        "errors": [] if safe else ["unsafe root"],
+    }
+
+
+def cleanup_reports(root: Path, keep: int = 10, dry_run: bool = False) -> dict[str, Any]:
+    validation = validate_cleanup_request(root, keep=keep)
+    keep = int(validation["normalized_keep"])
+    if validation["status"] == "blocked":
+        return {**validation, "dry_run": dry_run, "kept_dirs": [], "removed_dirs": []}
     root.mkdir(parents=True, exist_ok=True)
     base_dirs = list((root / "turns").iterdir()) if (root / "turns").exists() else []
     if not base_dirs:
@@ -398,14 +427,14 @@ def cleanup_reports(root: Path, keep: int = 10, dry_run: bool = False) -> dict[s
                 errors.append(f"{directory}: {exc}")
     report = {
         "root": str(root),
-        "keep": original_keep,
-        "normalized_keep": keep,
+        "keep": validation["keep"],
+        "normalized_keep": validation["normalized_keep"],
         "total_dirs": len(ordered),
         "kept_dirs": [str(item) for item in kept],
         "removed_dirs": [str(item) for item in removed],
         "dry_run": dry_run,
         "errors": errors,
-        "warnings": warnings,
+        "warnings": validation["warnings"],
         "status": "PASS" if not errors else "WARN",
     }
     write_json(root / "cleanup_report.json", report)
@@ -413,14 +442,14 @@ def cleanup_reports(root: Path, keep: int = 10, dry_run: bool = False) -> dict[s
         "# Cleanup Report",
         "",
         f"- root: {root}",
-        f"- keep: {original_keep}",
+        f"- keep: {validation['keep']}",
         f"- normalized_keep: {keep}",
         f"- total_dirs: {len(ordered)}",
         f"- kept: {len(kept)}",
         f"- removed: {len(removed)}",
         f"- dry_run: {dry_run}",
         f"- errors: {len(errors)}",
-        f"- warnings: {len(warnings)}",
+        f"- warnings: {len(validation['warnings'])}",
     ])
     return report
 
@@ -484,6 +513,34 @@ def path_tokens(text: str) -> list[str]:
     return re.findall(r"(?:outputs|config|release|dataset|docs)[A-Za-z0-9_./\\-]*(?:\.yaml|\.yml|\.md|\.jsonl|\.json|\.pt)?", text)
 
 
+@dataclass(frozen=True)
+class IntentRule:
+    command: str
+    keywords: tuple[str, ...]
+    default_args: tuple[str, ...] = ()
+    path_limit: int | None = None
+    parse_keep: bool = False
+
+
+INTENT_RULES = [
+    IntentRule("safe_smoke", ("smoke", "运行 smoke", "测试基本流程")),
+    IntentRule("safe_audit", ("clean audit", "运行 audit", "运行审计", "清理检查")),
+    IntentRule("safe_compile", ("编译 agent", "检查 llm.py", "py_compile")),
+    IntentRule("cleanup", ("cleanup", "清理旧报告", "保留"), parse_keep=True),
+    IntentRule("benchmark_candidate", ("benchmark", "跑 benchmark")),
+    IntentRule("train_candidate", ("train", "训练")),
+    IntentRule("doctor", ("doctor", "综合诊断", "一键诊断"), ("outputs/candidate", "config/candidate.yaml"), 2),
+    IntentRule("inspect", ("inspect", "检查 candidate", "体检 candidate", "检查训练"), ("outputs/candidate",), 1),
+    IntentRule("trace", ("trace", "追踪", "推理链路"), path_limit=3),
+    IntentRule("compare", ("compare", "对比"), ("outputs/candidate", "outputs/oldbase"), 2),
+    IntentRule("case", ("case", "错误样本", "样本分析"), ("outputs/candidate/predictions.jsonl",), 1),
+    IntentRule("diagnose", ("diagnose", "诊断"), ("outputs/candidate",), 1),
+    IntentRule("schedule", ("schedule", "计划", "调度", "下一步"), ("outputs/candidate", "config/candidate.yaml"), 2),
+    IntentRule("report", ("report", "报告", "总结", "整理"), ("release/model_card.md", "release/results_summary.md", "release/limitations.md")),
+    IntentRule("auditdata", ("auditdata", "数据审计", "审计"), ("dataset/archive/train.jsonl", "dataset/archive/test.jsonl")),
+]
+
+
 def parse_agent_command(raw: str) -> tuple[str, list[str], str | None]:
     text = raw.strip()
     if not text:
@@ -504,41 +561,17 @@ def parse_agent_command(raw: str) -> tuple[str, list[str], str | None]:
         return command, parts[1:], prefix_mode
     paths = path_tokens(text)
     lower = text.lower()
-    if "smoke" in lower or "\u8fd0\u884c smoke" in lower or "\u6d4b\u8bd5\u57fa\u672c\u6d41\u7a0b" in lower:
-        return "safe_smoke", [], prefix_mode
-    if "clean audit" in lower or "\u8fd0\u884c audit" in lower or "\u8fd0\u884c\u5ba1\u8ba1" in lower or "\u6e05\u7406\u68c0\u67e5" in lower:
-        return "safe_audit", [], prefix_mode
-    if "\u7f16\u8bd1 agent" in lower or "\u68c0\u67e5 llm.py" in lower or "py_compile" in lower:
-        return "safe_compile", [], prefix_mode
-    if "cleanup" in lower or "\u6e05\u7406\u65e7\u62a5\u544a" in lower or "\u4fdd\u7559" in lower:
-        keep = next((int(item) for item in re.findall(r"-?\d+", text)), 10)
-        return "cleanup", [str(keep)], prefix_mode
-    if "benchmark" in lower or "\u8dd1 benchmark" in lower:
-        return "benchmark_candidate", [], prefix_mode
-    if "train" in lower or "\u8bad\u7ec3" in lower:
-        return "train_candidate", [], prefix_mode
-    if "doctor" in lower or "\u7efc\u5408\u8bca\u65ad" in lower or "\u4e00\u952e\u8bca\u65ad" in lower:
-        return "doctor", paths[:2] or ["outputs/candidate", "config/candidate.yaml"], prefix_mode
-    if "inspect" in lower or "\u68c0\u67e5 candidate" in lower or "\u4f53\u68c0 candidate" in lower or "\u68c0\u67e5\u8bad\u7ec3" in lower:
-        return "inspect", paths[:1] or ["outputs/candidate"], prefix_mode
-    if "trace" in lower or "\u8ffd\u8e2a" in lower or "\u63a8\u7406\u94fe\u8def" in lower:
-        return "trace", paths[:3], prefix_mode
-    if "compare" in lower or "\u5bf9\u6bd4" in lower:
-        return "compare", paths[:2] or ["outputs/candidate", "outputs/oldbase"], prefix_mode
-    if "case" in lower or "\u9519\u8bef\u6837\u672c" in lower or "\u6837\u672c\u5206\u6790" in lower:
-        return "case", paths[:1] or ["outputs/candidate/predictions.jsonl"], prefix_mode
-    if "diagnose" in lower or "\u8bca\u65ad" in lower:
-        return "diagnose", paths[:1] or ["outputs/candidate"], prefix_mode
-    if "schedule" in lower or "\u8ba1\u5212" in lower or "\u8c03\u5ea6" in lower or "\u4e0b\u4e00\u6b65" in lower:
-        return "schedule", paths[:2] or ["outputs/candidate", "config/candidate.yaml"], prefix_mode
-    if "report" in lower or "\u62a5\u544a" in lower or "\u603b\u7ed3" in lower or "\u6574\u7406" in lower:
-        return "report", paths or ["release/model_card.md", "release/results_summary.md", "release/limitations.md"], prefix_mode
-    if "auditdata" in lower or "\u6570\u636e\u5ba1\u8ba1" in lower or "\u5ba1\u8ba1" in lower:
-        return "auditdata", paths or ["dataset/archive/train.jsonl", "dataset/archive/test.jsonl"], prefix_mode
+    for rule in INTENT_RULES:
+        if any(keyword.lower() in lower for keyword in rule.keywords):
+            if rule.parse_keep:
+                keep = next((int(item) for item in re.findall(r"-?\d+", text)), 10)
+                return rule.command, [str(keep)], prefix_mode
+            selected = paths[: rule.path_limit] if rule.path_limit is not None else paths
+            return rule.command, selected or list(rule.default_args), prefix_mode
     return "unknown", [], prefix_mode
 
 
-DANGEROUS_ALWAYS = ["git push", "git commit", "git reset", "git checkout", "git clean", "&&", "||", ";", "|", " rm ", " del ", "remove ", " mv ", " cp ", ".env", "api_key", "llm_api_key", "cuda_visible_devices", "pip install", "conda install", "curl ", "wget ", "config/fixed.yaml", "release/best_config.yaml"]
+DANGEROUS_ALWAYS = ["git push", "git commit", "git reset", "git checkout", "git clean", "&&", "||", ";", "|", ">", ">>", " rm ", " del ", "remove ", " mv ", " cp ", ".env", "api_key", "llm_api_key", "cuda_visible_devices", "pip install", "conda install", "curl ", "wget ", "config/fixed.yaml", "release/best_config.yaml"]
 DANGEROUS_WRITE = ["rm ", "del ", "remove ", "mv ", "cp ", "overwrite", "\u4fee\u6539\u914d\u7f6e", "\u5220\u9664", "\u8986\u76d6", ".env", "api_key", "llm_api_key", "cuda_visible_devices", "pip install", "conda install", "curl ", "wget "]
 DIAGNOSTIC_ARTIFACT_PATTERNS = ["benchmark.json", "predictions.jsonl", "best.pt", "checkpoint"]
 DIAGNOSTIC_COMMANDS = {"trace", "case", "doctor", "inspect", "compare", "diagnose", "report"}
@@ -636,36 +669,11 @@ def prompt_hash(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
 
 
-def guard_live_call(state: dict[str, Any], prompt: str, turn_dir: Path) -> tuple[bool, str | None]:
-    ph = prompt_hash(prompt)
-    repeated = state["prompt_hash_counts"].get(ph, 0)
-    estimated = max(1, len(prompt) // 4)
-    reason = None
-    if state["api_calls"] >= state["max_api_calls"]:
-        reason = "max_api_calls"
-    elif state["estimated_tokens"] + estimated > state["max_tokens_total"]:
-        reason = "max_tokens_total"
-    elif repeated >= state["max_same_prompt"]:
-        reason = "same_prompt_repeated"
-    elif state["turn"] >= state["max_turns"]:
-        reason = "max_turns"
-    if reason:
-        data = {
-            "stop_reason": reason,
-            "api_calls": state["api_calls"],
-            "estimated_tokens": state["estimated_tokens"],
-            "prompt_hash": ph,
-            "repeated_count": repeated,
-            "last_command": state.get("last_command"),
-            "recommended_action": "Switch to /dry, reduce input files, or start a new shell.",
-        }
-        write_json(turn_dir / "limit_stop.json", data)
-        write_markdown(turn_dir / "limit_stop.md", ["# Agent Limit Stop", "", *[f"- {k}: {v}" for k, v in data.items()]])
-        return False, reason
-    state["prompt_hash_counts"][ph] = repeated + 1
-    state["api_calls"] += 1
-    state["estimated_tokens"] += estimated
-    return True, None
+def sync_guard_state(state: dict[str, Any], guard: AgentRuntimeGuard) -> None:
+    snap = guard.snapshot()
+    state["api_calls"] = snap["api_calls"]
+    state["estimated_tokens"] = snap["estimated_tokens"]
+    state["prompt_hash_counts"] = dict(guard.prompt_hash_counts)
 
 
 def shell_status(state: dict[str, Any]) -> dict[str, Any]:
@@ -694,7 +702,7 @@ def shell_status(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_confirmed_command(cmd: list[str], intent: str) -> tuple[bool, str]:
-    joined = " ".join(cmd).lower()
+    joined = " ".join(cmd[1:]).lower()
     forbidden = [";", "&&", "||", "|", ">", ">>", " rm ", " del ", " remove ", " mv ", " cp ", "git", "pip", "conda", "curl", "wget", "config/fixed.yaml", "release/best_config.yaml", "dataset", "benchmark", "eval.py", "scripts/run.py", "cuda_visible_devices"]
     for item in forbidden:
         if item in f" {joined} ":
@@ -707,11 +715,11 @@ def validate_confirmed_command(cmd: list[str], intent: str) -> tuple[bool, str]:
 
 
 def execute_confirmed_train(state: dict[str, Any]) -> tuple[str, str]:
-    if state["mode"] == "dry_run":
-        return "DRY_RUN", "planned: python main.py train --config config/candidate.yaml --device cuda"
     ok, reason = validate_confirmed_command(TRAIN_COMMAND, "train_candidate")
     if not ok:
         return "BLOCKED", reason
+    if state["mode"] == "dry_run":
+        return "DRY_RUN", "planned: python main.py train --config config/candidate.yaml --device cuda"
     warnings = []
     for artifact in [ROOT / "outputs" / "candidate" / "best.pt", ROOT / "outputs" / "candidate" / "last.pt", ROOT / "outputs" / "candidate" / "benchmark.json", ROOT / "outputs" / "candidate" / "predictions.jsonl"]:
         if artifact.exists():
@@ -769,7 +777,7 @@ def default_state(args: argparse.Namespace, out: Path, history: Path) -> dict[st
         "ui_mode": "normal",
         "model": args.model,
     }
-    state["guard"] = AgentRuntimeGuard(
+    state["runtime_guard"] = AgentRuntimeGuard(
         out,
         max_api_calls=state["max_api_calls"],
         max_tokens_total=state["max_tokens_total"],
@@ -880,6 +888,9 @@ def execute_input(raw: str, state: dict[str, Any], agent: RNAAnalysisAgent, echo
         if pending["intent"] == "train_candidate" and lowered in CONFIRM_TRAIN:
             command = "confirmed_train_candidate"
             status_text, summary = execute_confirmed_train(state)
+            if status_text == "BLOCKED":
+                status = "blocked"
+                write_markdown(turn_dir / "blocked.md", [summary])
             state["confirmed_commands"].append({"intent": pending["intent"], "command": pending["command"], "confirmed_by_user": True})
             state["pending_confirmation"] = None
             concise_print(state, ["Confirmed training command.", "Config: config/candidate.yaml"], [f"{status_text}: {summary}"], "Inspect the run directory before any benchmark.")
@@ -1063,22 +1074,18 @@ def execute_input(raw: str, state: dict[str, Any], agent: RNAAnalysisAgent, echo
             write_markdown(turn_dir / "prompt.md", [prompt])
             state["last_report_path"] = str(turn_dir / "prompt.md")
             if state["mode"] == "live":
-                guard: AgentRuntimeGuard = state["guard"]
+                guard: AgentRuntimeGuard = state["runtime_guard"]
                 guard.mode = state["mode"]
                 ok, stop_data = guard.check_before_call(prompt, command)
                 if not ok:
                     status = "blocked"
                     guard.write_limit_stop(turn_dir, stop_data)
-                    state["api_calls"] = guard.api_calls
-                    state["estimated_tokens"] = guard.estimated_tokens
-                    state["prompt_hash_counts"] = guard.prompt_hash_counts
+                    sync_guard_state(state, guard)
                     concise_print(state, ["Check API/cycle guard."], [f"Agent stopped this request because API/cycle guard was triggered. Reason: {stop_data['stop_reason']}", f"See: {turn_dir / 'limit_stop.md'}"], "Switch to /dry or reduce input files.")
                 else:
                     response, usage = agent.call_with_usage(prompt)
                     guard.record_call(prompt, usage)
-                    state["api_calls"] = guard.api_calls
-                    state["estimated_tokens"] = guard.estimated_tokens
-                    state["prompt_hash_counts"] = guard.prompt_hash_counts
+                    sync_guard_state(state, guard)
                     write_markdown(turn_dir / "response.md", [response])
                     state["last_report_path"] = str(turn_dir / "response.md")
                     concise_print(state, [f"Run {command} analysis."], [f"response -> {turn_dir / 'response.md'}"], "Review the report before changing experiments.")
@@ -1178,6 +1185,8 @@ def run_agent_test(args: argparse.Namespace) -> None:
         "rm -rf outputs",
         "CUDA_VISIBLE_DEVICES=0 python main.py train",
         "report .env",
+        "report README.md > .env",
+        "\u8fd0\u884c smoke >> outputs/log.txt",
         "python main.py train --config config/fixed.yaml",
         "\u8bad\u7ec3 candidate && git push",
         "\u8fdb\u884c\u8bad\u7ec3 && rm -rf outputs",

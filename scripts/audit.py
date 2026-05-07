@@ -4,21 +4,10 @@ import argparse
 import json
 import subprocess
 import sys
-import time
 from pathlib import Path
-
-import torch
-from torch.utils.data import DataLoader
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-
-from models.collator import RNAOmniCollator
-from models.dataset import RNAOmniDataset
-from models.token import RNAOmniTokenizer
-from main import build_model, load_config, loss_from_batch, move_batch_to_device, resolve_device
-from models.omni import _pair_loss_mask
-from utils.struct import parse_dot_bracket
 
 
 OLD_SCRIPT_FILES = [
@@ -156,7 +145,7 @@ AGENT_SHELL_MARKERS = [
 
 def check_agent_shell_behavior(warnings: list[str]) -> None:
     try:
-        from scripts.llm import block_reason, cleanup_reports, parse_agent_command, safe_root
+        from scripts.llm import block_reason, parse_agent_command, safe_root, validate_cleanup_request
 
         behavior_checks = [
             (parse_agent_command("\u8fd0\u884c smoke")[0] == "safe_smoke", "parse smoke"),
@@ -173,6 +162,8 @@ def check_agent_shell_behavior(warnings: list[str]) -> None:
             (block_reason("rm -rf outputs", "unknown") is not None, "block rm"),
             (block_reason("CUDA_VISIBLE_DEVICES=0 python main.py train", "unknown") is not None, "block cuda env"),
             (block_reason("report .env", "report") is not None, "block env read"),
+            (block_reason("report README.md > .env", "report") is not None, "block redirect env"),
+            (block_reason("运行 smoke >> outputs/log.txt", "safe_smoke") is not None, "block redirect log"),
             (safe_root(Path("outputs/llm_shell")) is True, "safe root llm_shell"),
             (safe_root(Path("outputs/llm")) is True, "safe root llm"),
             (safe_root(Path("outputs/llm_test")) is True, "safe root llm_test"),
@@ -185,10 +176,10 @@ def check_agent_shell_behavior(warnings: list[str]) -> None:
             (safe_root(Path(".git")) is False, "block root git"),
         ]
         failed = [name for ok, name in behavior_checks if not ok]
-        normalized = cleanup_reports(Path("outputs/llm_shell_test"), keep=-1, dry_run=True)
+        normalized = validate_cleanup_request(Path("outputs/llm_shell_test"), keep=-1)
         if normalized.get("normalized_keep") != 10:
             failed.append("cleanup keep normalization")
-        if cleanup_reports(Path("models"), keep=10, dry_run=True).get("status") != "blocked":
+        if validate_cleanup_request(Path("models"), keep=10).get("status") != "blocked":
             failed.append("cleanup blocks models")
         if failed:
             warnings.append("Agent behavior checks failed: " + ", ".join(failed))
@@ -243,6 +234,11 @@ def ensure_archive_paths(config: dict) -> None:
 
 
 def make_batch(config: dict, batches: int) -> tuple[dict, RNAOmniTokenizer]:
+    from torch.utils.data import DataLoader
+    from models.collator import RNAOmniCollator
+    from models.dataset import RNAOmniDataset
+    from models.token import RNAOmniTokenizer
+
     ensure_archive_paths(config)
     dataset = RNAOmniDataset(config["data"]["train_jsonl"], max_length=int(config["data"]["max_length"]))
     samples = dataset.samples[: max(1, int(config["training"].get("batch_size", 8)) * batches)]
@@ -259,6 +255,11 @@ def make_batch(config: dict, batches: int) -> tuple[dict, RNAOmniTokenizer]:
 
 
 def run_align(args: argparse.Namespace) -> None:
+    import torch
+    from main import build_model, load_config, loss_from_batch, move_batch_to_device, resolve_device
+    from models.omni import _pair_loss_mask
+    from utils.struct import parse_dot_bracket
+
     config = load_config(args.config)
     batch, tokenizer = make_batch(config, args.batches)
     device = resolve_device(args.device)
@@ -370,6 +371,10 @@ def run_align(args: argparse.Namespace) -> None:
 
 
 def run_profile(args: argparse.Namespace) -> None:
+    import time
+    import torch
+    from main import build_model, load_config, move_batch_to_device, resolve_device
+
     config = load_config(args.config)
     batch, tokenizer = make_batch(config, 1)
     device = resolve_device(args.device)

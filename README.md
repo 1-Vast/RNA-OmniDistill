@@ -133,7 +133,7 @@ Example commands: `diagnose`, `schedule`, `report`, `auditdata`, `inspect`, `tra
 
 The shell is read-only and does not run training or benchmark inference. Use `--dry_run` or `--no_api` to generate prompts without API calls.
 
-Safety guards: candidate training requires explicit confirmation (`进行训练 candidate`); benchmark execution remains blocked; API calls guarded by `max_api_calls`, `max_tokens_total`, `api_timeout`, retry count, and repeated prompt guard; shell commands use `command_timeout`/`train_timeout`; loop/stall detection for repeated inputs and failed commands; `/cleanup` keeps the most recent 10 report dirs (only `outputs/llm*` locations); clean audit includes behavior-based checks for command parsing, dangerous-command blocking, and cleanup root safety.
+Safety guards: candidate training requires explicit confirmation (`进行训练 candidate`); unsafe benchmark execution remains blocked; API calls guarded by `max_api_calls`, `max_tokens_total`, `api_timeout`, retry count, and repeated prompt guard; shell commands use `command_timeout`/`train_timeout`; loop/stall detection for repeated inputs and failed commands; `/cleanup` keeps the most recent 10 report dirs (only `outputs/llm*` locations); clean audit includes behavior-based checks for command parsing, dangerous-command blocking, and cleanup root safety. Output stays concise by default.
 
 ```bash
 python scripts/llm.py agent --dry_run --api_timeout 60 --command_timeout 120 --train_timeout 0
