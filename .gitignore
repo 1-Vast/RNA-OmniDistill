@@ -19,6 +19,7 @@ dataset/processed/bprna_random/
 dataset/processed/rfam_random/
 dataset/processed/rfam_family/
 dataset/processed/rfam/
+dataset/processed/crw_trna/
 
 .env
 .venv/

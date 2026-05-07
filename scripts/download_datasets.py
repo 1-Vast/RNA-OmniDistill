@@ -120,6 +120,63 @@ DATASETS: Dict[str, Dict[str, Any]] = {
         "extract": False,
         "description": "RNA families database (seed alignment + full + covariance models)",
     },
+    "RNASSTR": {
+        "name": "RNASSTR",
+        "urls": [
+            "https://zenodo.org/records/15319168/files/RNASSTR_train.csv",
+            "https://zenodo.org/records/15319168/files/RNASSTR_validation.csv",
+            "https://zenodo.org/records/15319168/files/RNASSTR_test.csv",
+        ],
+        "out_filename": None,
+        "extract": False,
+        "description": "RNA Secondary Structure Repository — 5M sequences, 4170 Rfam families, CSV format (2025)",
+    },
+    "CRW_tRNA": {
+        "name": "CRW_tRNA",
+        "urls": [
+            "http://crw-site.chemistry.gatech.edu/DAT/3C/SBPI/Files/trnA.ct.tar.gz",
+            "http://crw-site.chemistry.gatech.edu/DAT/3C/SBPI/Files/trnC.ct.tar.gz",
+            "http://crw-site.chemistry.gatech.edu/DAT/3C/SBPI/Files/trnD.ct.tar.gz",
+            "http://crw-site.chemistry.gatech.edu/DAT/3C/SBPI/Files/trnE.ct.tar.gz",
+            "http://crw-site.chemistry.gatech.edu/DAT/3C/SBPI/Files/trnF.ct.tar.gz",
+            "http://crw-site.chemistry.gatech.edu/DAT/3C/SBPI/Files/trnG.ct.tar.gz",
+            "http://crw-site.chemistry.gatech.edu/DAT/3C/SBPI/Files/trnH.ct.tar.gz",
+            "http://crw-site.chemistry.gatech.edu/DAT/3C/SBPI/Files/trnI.ct.tar.gz",
+            "http://crw-site.chemistry.gatech.edu/DAT/3C/SBPI/Files/trnK.ct.tar.gz",
+            "http://crw-site.chemistry.gatech.edu/DAT/3C/SBPI/Files/trnM.ct.tar.gz",
+            "http://crw-site.chemistry.gatech.edu/DAT/3C/SBPI/Files/trnN.ct.tar.gz",
+            "http://crw-site.chemistry.gatech.edu/DAT/3C/SBPI/Files/trnP.ct.tar.gz",
+            "http://crw-site.chemistry.gatech.edu/DAT/3C/SBPI/Files/trnQ.ct.tar.gz",
+            "http://crw-site.chemistry.gatech.edu/DAT/3C/SBPI/Files/trnW.ct.tar.gz",
+            "http://crw-site.chemistry.gatech.edu/DAT/3C/SBPI/Files/trnY1.ct.tar.gz",
+        ],
+        "out_filename": None,
+        "extract": True,
+        "extract_format": "tar.gz",
+        "description": "CRW Comparative tRNA dataset (Gutell Lab) — 15 isoacceptors, ~32K sequences, CT format",
+    },
+    "RNA3DB": {
+        "name": "RNA3DB",
+        "urls": [
+            "https://github.com/marcellszi/rna3db/releases/download/2026-01-05-full-release/rna3db-jsons.tar.gz",
+            "https://github.com/marcellszi/rna3db/releases/download/2026-01-05-full-release/rna3db-cmscans.tar.gz",
+        ],
+        "out_filename": None,
+        "extract": True,
+        "extract_format": "tar.gz",
+        "description": "RNA3DB — PDB-derived non-redundant RNA structures, 216 Rfam families, family-disjoint splits (2024)",
+    },
+    "CHANRG": {
+        "name": "CHANRG",
+        "urls": [
+            "https://huggingface.co/datasets/multimolecule/chanrg/resolve/main/train.parquet",
+            "https://huggingface.co/datasets/multimolecule/chanrg/resolve/main/validation.parquet",
+            "https://huggingface.co/datasets/multimolecule/chanrg/resolve/main/test.parquet",
+        ],
+        "out_filename": None,
+        "extract": False,
+        "description": "CHANRG — OOD generalization benchmark, Rfam 15.0, 170K sequences, Parquet format (2026)",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -374,6 +431,33 @@ def _process_dataset(name: str, info: Dict[str, Any], raw_root: Path, force: boo
             result["status"] = "partial"
         else:
             result["status"] = "download_failed"
+
+        # Extract tar.gz files if dataset requires extraction
+        if info.get("extract"):
+            for dl in result["downloads"]:
+                if dl["status"] not in ("success", "cached"):
+                    continue
+                src = Path(dl["local"])
+                if not src.exists() or not src.suffix.lower() in (".gz",):
+                    continue
+                if src.name.endswith(".tar.gz"):
+                    # Check if already extracted
+                    stem = src.name.replace(".tar.gz", "")
+                    already = (dataset_dir / stem).exists() or any(
+                        f.name not in ("manifest.json", "README_DOWNLOAD.txt")
+                        and f.name != src.name
+                        for f in dataset_dir.rglob("*") if f.is_file()
+                    )
+                    if already and not force:
+                        result["extracted"] = True
+                        continue
+                    ok, err = _extract_tar_gz(src, dataset_dir)
+                    if ok:
+                        result["extracted"] = True
+                    else:
+                        result["errors"].append(f"Extract failed ({src.name}): {err}")
+            if result["extracted"] and result["status"] in ("ready", "partial"):
+                result["status"] = "ready"
 
     # --- Write manifest ---
     manifest_info = {

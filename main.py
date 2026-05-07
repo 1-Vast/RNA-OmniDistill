@@ -1,37 +1,20 @@
-"""RNA-OmniDiffusion command line interface.
+"""RNA-OmniDiffusion CLI -- research entry window.
 
-This file is the public entry window of the project. It exposes the
-research workflow around RNAOmniDiffusion, a pair-refined masked
-diffusion model for RNA secondary structure prediction.
-
-Framework
----------
-  Core        Transformer encoder with task, segment, time, position embeddings.
+Pair-refined masked diffusion for RNA secondary structure:
+  Core        Transformer encoder (task, segment, time, position embeddings).
   Token heads Sequence / structure / general prediction over RNA tokens.
   Pair head   MLP base-pair logits over sequence positions.
-  Pair refine Optional 2D convolutional refinement over pair-logit map.
-  Decoding    Strict Nussinov DP for valid non-crossing dot-bracket structures.
+  Pair refine Optional 2D conv refinement over pair-logit map.
+  Decoding    Strict Nussinov DP for valid non-crossing structures.
 
-Modes
------
-  train     Train from YAML config.
-  eval      Evaluate checkpoint on validation split.
-  infer     Single-sample seq2struct or inverse folding inference.
-  smoke     Tiny CPU sanity test.
-  params    Inspect tunable parameters with descriptions and tuning hints.
-  overview  Print this model framework map.
-  agent     Show optional analysis/training assistant usage.
-
-Heavy torch-dependent logic is lazy-imported by subcommands, so
-overview / params / agent remain lightweight.
+Modes: train | eval | infer | smoke | params | overview | agent.
+Torch is lazy-imported per subcommand -- overview / params / agent are lightweight.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import sys
-from pathlib import Path
 from typing import Any
 
 # ── Mode registry ──────────────────────────────────────────

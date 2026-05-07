@@ -24,6 +24,8 @@
 - `scripts/audit.py`: clean audit, naming audit, config integrity.
 - `scripts/probe.py`: smoke, overfit, and small sanity probes.
 - `scripts/llm.py`: CLI and concise interactive shell for the optional LLM analysis agent, including inspect, trace, compare, case, doctor, usage, memory, cleanup, API runtime guard, loop/stall guard, cleanup guard, `/last`, `/open`, and confirmation-gated candidate training controls.
+- `scripts/download_datasets.py`: Download RNA structure datasets to `dataset/raw/`. Standard library only, no credentials.
+- `scripts/upload_datasets.py`: SFTP upload of raw datasets to remote server. Default dry-run, password prompted at terminal, never hardcoded.
 
 ## Main Configs
 

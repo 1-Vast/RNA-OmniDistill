@@ -201,6 +201,31 @@ rsync -avz \
 
 Do not upload `outputs/`, `dataset/`, `checkpoints/`, or `.env`. Passwords remain terminal-entry only.
 
+## Safe Data Sync Scripts
+
+### Download Datasets
+`scripts/download_datasets.py` downloads five classic RNA structure datasets (`ArchiveII`, `bpRNA`, `RNAStralign`, `RNAStrAND`, `Rfam`) plus recent benchmarks (`RNA3DB`, `CHANRG`, `RNASSTR`, `CRW_tRNA`). Standard library only, no passwords or API keys.
+
+```bash
+# Dry-run: download to dataset/raw/
+python scripts/download_datasets.py
+python scripts/download_datasets.py --datasets ArchiveII Rfam
+```
+
+### Upload Datasets to Remote
+`scripts/upload_datasets.py` syncs raw datasets to a remote server via SFTP. Default is dry-run; use `--execute` for actual transfer. Password is entered manually — never hardcoded.
+
+```bash
+# Dry-run: print upload plan
+python scripts/upload_datasets.py --dry-run
+python scripts/upload_datasets.py --host connect.nmb1.seetacloud.com --port 49018 --user root --remote-dir /root/RNA-OmniDiffusion/dataset/raw --dry-run
+
+# Execute: password prompted in terminal
+python scripts/upload_datasets.py --host connect.nmb1.seetacloud.com --port 49018 --user root --remote-dir /root/RNA-OmniDiffusion/dataset/raw --execute
+```
+
+Excludes `.env`, `outputs/`, `checkpoints/`, `.git/`, and other sensitive paths automatically.
+
 ## Suggested Workflow
 
 1. **Smoke test**: `python main.py smoke` — verify code and environment.
