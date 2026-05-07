@@ -1,45 +1,55 @@
-# RNA-OmniDiffusion — Index
+# RNA-OmniDiffusion Index
 
-## Core
+## Paper Entry
 
-- `main.py` — train, eval, infer, smoke entrypoint
-- `models/omni.py` — Transformer model, pair head, pairrefine, loss
-- `models/decode.py` — iterative decoding, strict Nussinov
-- `models/mask.py` — masking helpers
-- `models/token.py` — RNA tokenizer
-- `models/dataset.py` — JSONL dataset
-- `models/collator.py` — task sampling, masking, pair labels
+- [release/paper.md](release/paper.md): 2026 paper framework, method narrative, experiment table plan, limitations, and claim boundaries.
 
-## Mainline Configs
+## Core Code
 
-- `config/candidate.yaml` — best candidate (pairrefine=true, masking=false)
-- `config/fixed.yaml` — alias of candidate
-- `config/oldbase.yaml` — historical baseline (pairrefine=false, masking=true)
-- `config/candidate_norefine.yaml` — no pairrefine control
-- `config/candidate_oldmask.yaml` — old masking control
-
-## External Configs
-
-- `config/external_bprna_candidate.yaml`
-- `config/external_bprna_norefine.yaml`
-- `config/external_bprna_oldbase.yaml`
+- `main.py`: train, eval, infer, smoke entrypoint.
+- `models/omni.py`: Transformer encoder, token heads, pair head, pair refinement, token/pair/conflict loss plumbing.
+- `models/decode.py`: strict Nussinov decoding, greedy probe, staged decode utilities.
+- `models/mask.py`: random, pair-aware, and motif-span masking helpers.
+- `models/dataset.py`: JSONL RNA dataset.
+- `models/collator.py`: task sampling, masking, segment ids, pair labels.
+- `models/token.py`: RNA tokenizer.
+- `models/pairprior.py`: optional diagnostic pair-prior probe, disabled by default.
+- `models/agent/analyzer.py`: LLM analysis agent for diagnostics, scheduling, paper reporting, and data audit.
 
 ## Scripts
 
-- `scripts/eval.py` — benchmark, paper artifact generation
-- `scripts/run.py` — external, ablation workflows
-- `scripts/dataset.py` — download, prepare, split external datasets
-- `scripts/audit.py` — clean audit, config integrity
+- `scripts/data.py`: fetch, prepare, check, and split datasets.
+- `scripts/eval.py`: strict benchmark, export, analyze, diagnose, scan.
+- `scripts/run.py`: potential, sweep, external benchmark, and ablation workflows.
+- `scripts/audit.py`: clean audit, naming audit, config integrity.
+- `scripts/probe.py`: smoke, overfit, and small sanity probes.
+- `scripts/llm.py`: CLI wrapper for the LLM analysis agent.
 
-## Release
+## Main Configs
 
-- `release/best_config.yaml`
-- `release/model_card.md`
-- `release/results_summary.md`
-- `release/reproduce.md`
-- `release/limitations.md`
+- `config/candidate.yaml`: current candidate model.
+- `config/fixed.yaml`: alias-style candidate configuration used by prior runs.
+- `config/oldbase.yaml`: historical baseline.
+- `config/candidate_norefine.yaml`: no pair-refinement control.
+- `config/candidate_oldmask.yaml`: old masking control.
+- `config/precision*.yaml`: rejected precision-oriented probes; useful only for diagnostics.
+- `config/archive_failed/`: failed or diagnostic configurations.
 
-## Archived / Failed Probes
+## Release Artifacts
 
-- `config/archive_failed/` — failed/diagnostic configs (precision, conflict-loss, semantic, constraint, LLM routes)
-- `docs/llm_negative_result.md` — LLM semantic conditioning negative result
+- `release/paper.md`: paper framework.
+- `release/results_summary.md`: benchmark and component tables.
+- `release/reproduce.md`: reproducibility commands.
+- `release/model_card.md`: candidate model card.
+- `release/limits.md`: limitations.
+- `docs/pairprior_probe.md`: pair-prior negative/weak-probe note.
+
+## Current Mainline Commands
+
+```bash
+python main.py smoke
+python main.py train --config config/candidate.yaml --device cuda
+python scripts/eval.py bench --config config/candidate.yaml --ckpt outputs/candidate/best.pt --split test --device cuda --decode nussinov --stage_logits --workers 8 --chunksize 2 --profile
+python scripts/eval.py bench --config config/candidate.yaml --ckpt outputs/candidate/best.pt --split test --device cuda --decode nussinov --decode_only --workers 8 --chunksize 2 --profile --scan config/scan.json
+python scripts/llm.py diagnose --run outputs/candidate --out outputs/llm/diagnose
+```

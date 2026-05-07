@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -369,16 +370,73 @@ def run_clean(args: argparse.Namespace) -> None:
         warnings.append("dataset data directory is missing")
     if not Path("scripts/data.py").exists():
         warnings.append("scripts/data.py is missing")
-    agent_files = [
-        path
-        for path in Path("models/agent").rglob("*")
-        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
-    ] if Path("models/agent").exists() else []
-    nonempty_agent = [str(path) for path in agent_files if path.name != "__init__.py" or path.read_text(encoding="utf-8", errors="replace").strip()]
     if not Path("models/agent/__init__.py").exists():
-        warnings.append("models/agent empty package is missing")
-    if nonempty_agent:
-        warnings.append("models/agent contains non-empty implementation files")
+        warnings.append("models/agent package is missing")
+
+    llm_script = Path("scripts/llm.py")
+    analyzer = Path("models/agent/analyzer.py")
+    llm_text = llm_script.read_text(encoding="utf-8", errors="replace") if llm_script.exists() else ""
+    analyzer_text = analyzer.read_text(encoding="utf-8", errors="replace") if analyzer.exists() else ""
+    if not llm_script.exists():
+        warnings.append("scripts/llm.py is missing")
+    if "--dry_run" not in llm_text:
+        warnings.append("scripts/llm.py does not expose --dry_run")
+    forbidden_llm_exec = ["subprocess", "os.system", "Popen", "exec_command", "scripts/eval.py bench"]
+    for item in forbidden_llm_exec:
+        if item in llm_text:
+            warnings.append(f"scripts/llm.py may execute forbidden workflow: {item}")
+    forbidden_agent_writes = ["predictions.jsonl", "benchmark.json", "best.pt", "last.pt"]
+    for item in forbidden_agent_writes:
+        if item in llm_text:
+            warnings.append(f"scripts/llm.py references protected artifact writes: {item}")
+    if "LLM_API_KEY" not in analyzer_text or "LLM_MODEL" not in analyzer_text or "LLM_BASE_URL" not in analyzer_text:
+        warnings.append("LLM analyzer does not read expected .env keys")
+    if any("print(" in line and "api_key" in line for line in analyzer_text.splitlines()):
+        warnings.append("LLM analyzer may print API key")
+
+    def config_text(path: str) -> str:
+        p = Path(path)
+        return p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
+
+    candidate_text = config_text("config/candidate.yaml")
+    fixed_text = config_text("config/fixed.yaml")
+    best_text = config_text("release/best_config.yaml")
+    for name, text in [
+        ("config/candidate.yaml", candidate_text),
+        ("config/fixed.yaml", fixed_text),
+        ("release/best_config.yaml", best_text),
+    ]:
+        lowered = text.lower()
+        if "semantic:" in lowered or "semantic.enabled: true" in lowered:
+            warnings.append(f"{name} may enable semantic conditioning")
+        if "constraint:" in lowered or "constraint.enabled: true" in lowered:
+            warnings.append(f"{name} may enable constraint conditioning")
+        if "pair_prior" in lowered or "pairprior" in lowered:
+            warnings.append(f"{name} references pair-prior; candidate path should keep it disabled")
+
+    readme_text = Path("README.md").read_text(encoding="utf-8", errors="replace") if Path("README.md").exists() else ""
+    if "LLM improves F1" in readme_text or "LLM improves Pair F1" in readme_text:
+        warnings.append("README appears to claim LLM improves model F1")
+    if "pair-prior" in readme_text.lower() and "optional" not in readme_text.lower():
+        warnings.append("README references pair-prior without optional/probe framing")
+
+    try:
+        tracked = subprocess.check_output(["git", "ls-files"], text=True, encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        tracked = []
+    blocked_prefixes = ("outputs/", "dataset/raw/")
+    blocked_exact = {".env"}
+    blocked_suffixes = (".pt", ".pth", ".ckpt")
+    tracked_blocked = [
+        item for item in tracked
+        if item in blocked_exact or item.startswith(blocked_prefixes) or item.endswith(blocked_suffixes)
+    ]
+    tracked_blocked.extend(
+        item for item in tracked
+        if item.startswith("dataset/processed/") and Path(item).exists() and Path(item).stat().st_size > 1_000_000
+    )
+    if tracked_blocked:
+        warnings.append("blocked generated or secret files are tracked")
     status = "PASS" if not warnings else "FAIL"
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -391,7 +449,8 @@ def run_clean(args: argparse.Namespace) -> None:
         "top_level_data_package_exists": top_data.exists(),
         "dataset_dir_exists": Path("dataset").exists(),
         "scripts_data_cli_exists": Path("scripts/data.py").exists(),
-        "nonempty_agent_files": nonempty_agent,
+        "agent_files": sorted(str(path) for path in Path("models/agent").rglob("*.py")) if Path("models/agent").exists() else [],
+        "tracked_blocked_files": tracked_blocked,
         "warnings": warnings,
         "recommended_next_command": "conda run -n DL python scripts\\run.py ablate --config config/fixed.yaml --only full nopair nonuss random --device cuda --decode nussinov --bench_workers 8 --bench_profile --bench_resume",
     }
