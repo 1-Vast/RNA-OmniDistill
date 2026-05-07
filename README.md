@@ -68,6 +68,12 @@ release/
 
 ## Reproduce
 
+Show framework:
+
+```bash
+python main.py overview
+```
+
 Smoke:
 
 ```bash

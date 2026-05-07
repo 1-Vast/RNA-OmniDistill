@@ -6,7 +6,7 @@
 
 ## Core Code
 
-- `main.py`: train, eval, infer, smoke entrypoint.
+- `main.py`: Clean CLI entry point for train, eval, infer, smoke, params, overview, and agent commands.
 - `models/omni.py`: Transformer encoder, token heads, pair head, pair refinement, token/pair/conflict loss plumbing.
 - `models/decode.py`: strict Nussinov decoding, greedy probe, staged decode utilities.
 - `models/mask.py`: random, pair-aware, and motif-span masking helpers.
@@ -48,6 +48,7 @@
 ## Current Mainline Commands
 
 ```bash
+python main.py overview
 python main.py smoke
 python main.py train --config config/candidate.yaml --device cuda
 python scripts/eval.py bench --config config/candidate.yaml --ckpt outputs/candidate/best.pt --split test --device cuda --decode nussinov --stage_logits --workers 8 --chunksize 2 --profile

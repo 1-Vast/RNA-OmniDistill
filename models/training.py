@@ -20,6 +20,16 @@ from models.token import RNAOmniTokenizer
 from models.decode import generate_sequence_invfold, generate_structure_seq2struct
 from models.omni import RNAOmniDiffusion, compute_omni_loss
 from utils.metric import base_pair_f1, evaluate_structures
+from models.display import (
+    checkpoint_saved,
+    early_stopping_summary,
+    epoch_line,
+    inference_header,
+    inference_result_invfold,
+    inference_result_seq2struct,
+    train_startup,
+    training_complete,
+)
 
 
 def load_config(path: str | Path) -> Dict[str, Any]:
@@ -735,18 +745,17 @@ def train_model(
         if old_log_path.exists():
             old_log_path.unlink()
     best_score = -math.inf
+    best_epoch = 0
+    best_raw_value = 0.0
     best_metric_name = str(config["training"].get("save_best_by", "val_pair_f1"))
     history = []
     log_every = int(config["training"].get("log_every", 20))
     patience = int(config["training"].get("early_stopping_patience", 10))
     min_delta = float(config["training"].get("min_delta", 0.0001))
     stale_epochs = 0
-    print(
-        f"loss_weights: lambda_seq={loss_options['lambda_seq']} lambda_struct={loss_options['lambda_struct']} "
-        f"lambda_pair={loss_options['lambda_pair']} structure_bracket_weight={loss_options['structure_bracket_weight']:.3f} "
-        f"pair_pos_weight={loss_options['pair_pos_weight']:.3f} use_pair_loss={loss_options['use_pair_loss']} "
-        f"lambdaConflict={loss_options['pair_options'].get('lambdaConflict', 0.0)}"
-    )
+    device_name = device.type
+    gpu_name = torch.cuda.get_device_name(0) if device.type == "cuda" else "CPU"
+    train_startup(config, device_name, gpu_name)
 
     for epoch in range(start_epoch, int(config["training"]["epochs"]) + 1):
         epoch_start = time.time()
@@ -817,21 +826,26 @@ def train_model(
             "lambdaConflict": float(config["training"].get("lambdaConflict", 0.0)),
         }
         history.append(epoch_metrics)
-        print(format_epoch_metrics(epoch_metrics))
+        print(epoch_line(epoch_metrics, epoch, int(config["training"]["epochs"])))
         warn_if_collapsed(epoch_metrics)
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(epoch_metrics) + "\n")
         save_checkpoint(last_path, model, tokenizer, config, epoch, epoch_metrics, optimizer, scheduler, global_step)
+        checkpoint_saved(str(last_path), is_best=False)
         raw_score = float(epoch_metrics.get(best_metric_name, math.inf if best_metric_name.endswith("loss") else -math.inf))
         score = -raw_score if best_metric_name.endswith("loss") else raw_score
         if score > best_score + min_delta:
             best_score = score
+            best_epoch = epoch
+            best_raw_value = raw_score
             stale_epochs = 0
             save_checkpoint(best_path, model, tokenizer, config, epoch, epoch_metrics, optimizer, scheduler, global_step)
+            checkpoint_saved(str(best_path), is_best=True, metric_name=best_metric_name, metric_value=raw_score)
         else:
             stale_epochs += 1
             if max_steps is None and stale_epochs >= patience:
-                print(f"Early stopping after {stale_epochs} stale epochs on {best_metric_name}.")
+                print()
+                early_stopping_summary(best_epoch, best_metric_name, best_raw_value, patience)
                 break
         if max_steps is not None and global_step >= max_steps:
             break
@@ -848,11 +862,16 @@ def train_model(
 
 def run_train(args: argparse.Namespace) -> None:
     config = load_config(args.config)
+    config["training"]["_config_path"] = args.config
     if args.resume:
         config["training"]["resume_from"] = args.resume
     result = train_model(config, max_steps=args.max_steps, train_subset=args.train_subset, device_name=args.device)
-    print(f"Best checkpoint: {result['best_path']}")
-    print(f"Last checkpoint: {result['last_path']}")
+    training_complete(
+        best_path=str(result["best_path"]),
+        last_path=str(result["last_path"]),
+        log_path=str(Path(config["training"]["output_dir"]) / "trainlog.jsonl"),
+        output_dir=config["training"]["output_dir"],
+    )
 
 
 def run_eval(args: argparse.Namespace) -> None:
@@ -903,16 +922,19 @@ def run_infer(args: argparse.Namespace) -> None:
             "The pair head was changed to an MLP; retrain the checkpoint or use a matching config."
         ) from exc
     model.eval()
+
+    inference_header(args.task, args.ckpt, args.config, args.device if args.device != "auto" else str(device))
+
     if args.task == "seq2struct":
         if not args.seq:
             raise ValueError("--seq is required for seq2struct inference.")
         struct = generate_structure_seq2struct(model, tokenizer, args.seq, config["decoding"], device)
-        print(struct)
+        inference_result_seq2struct(args.seq, struct, len(args.seq))
     elif args.task == "invfold":
         if not args.struct:
             raise ValueError("--struct is required for invfold inference.")
         seq = generate_sequence_invfold(model, tokenizer, args.struct, config["decoding"], device)
-        print(seq)
+        inference_result_invfold(args.struct, seq, len(args.struct))
     else:
         raise ValueError("Minimal CLI inference supports --task seq2struct or --task invfold.")
 
@@ -957,46 +979,4 @@ def run_smoke(args: argparse.Namespace) -> None:
     print(f"pred_struct={pred_struct}")
     print(f"bp_f1_vs_toy={base_pair_f1(pred_struct, true_struct):.4f}")
     print("smoke_ok")
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="RNA-OmniDiffusion-v2")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    train = subparsers.add_parser("train")
-    train.add_argument("--config", default="config/base.yaml")
-    train.add_argument("--resume")
-    train.add_argument("--max_steps", type=int)
-    train.add_argument("--train_subset", type=int)
-    train.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
-    train.set_defaults(func=run_train)
-
-    eval_parser = subparsers.add_parser("eval")
-    eval_parser.add_argument("--config", default="config/base.yaml")
-    eval_parser.add_argument("--ckpt", required=True)
-    eval_parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
-    eval_parser.set_defaults(func=run_eval)
-
-    infer = subparsers.add_parser("infer")
-    infer.add_argument("--config", default="config/base.yaml")
-    infer.add_argument("--ckpt", required=True)
-    infer.add_argument("--task", required=True, choices=["seq2struct", "invfold"])
-    infer.add_argument("--seq")
-    infer.add_argument("--struct")
-    infer.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
-    infer.set_defaults(func=run_infer)
-
-    smoke = subparsers.add_parser("smoke")
-    smoke.set_defaults(func=run_smoke)
-    return parser
-
-
-def main(argv: Iterable[str] | None = None) -> None:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    args.func(args)
-
-
-if __name__ == "__main__":
-    main()
 
