@@ -385,17 +385,28 @@ def run_clean(args: argparse.Namespace) -> None:
         warnings.append("scripts/llm.py does not expose agent shell subcommand")
     if "agent_test" not in llm_text:
         warnings.append("scripts/llm.py does not expose agent_test")
-    for command in ["inspect", "trace", "compare", "case", "doctor"]:
+    for command in ["inspect", "trace", "compare", "case", "doctor", "cleanup", "usage"]:
         if command not in llm_text:
             warnings.append(f"scripts/llm.py does not support {command}")
-    if not all(command in llm_text for command in ["inspect outputs/candidate", "trace config/candidate.yaml", "compare outputs/candidate", "case outputs/candidate", "doctor outputs/candidate"]):
-        warnings.append("agent_test does not cover all new diagnostic commands")
-    if "safety_block_reason" not in llm_text or "Blocked by Agent safety policy" not in llm_text:
+    for marker in ["max_api_calls", "max_tokens_total", "timeout", "max_turns", "max_same_prompt"]:
+        if marker not in llm_text:
+            warnings.append(f"scripts/llm.py missing API guard marker: {marker}")
+    for marker in ["safe_root", "keep", "outputs/llm_shell_test", "dataset", "config", "models", "scripts", "release", "docs", ".git"]:
+        if marker not in llm_text:
+            warnings.append(f"scripts/llm.py missing cleanup guard marker: {marker}")
+    for marker in ["CONFIRM_TRAIN", "pending_confirmation", "confirmed_train_candidate", "benchmark_candidate", "git push", ".env", "/quiet", "/verbose", "concise_print"]:
+        if marker not in llm_text:
+            warnings.append(f"scripts/llm.py missing shell safety/UI marker: {marker}")
+    if not all(command in llm_text for command in ["\\u68c0\\u67e5 candidate", "\\u7efc\\u5408\\u8bca\\u65ad", "\\u8fd0\\u884c smoke", "\\u8fd0\\u884c audit", "\\u8fdb\\u884c\\u8bad\\u7ec3"]):
+        warnings.append("agent_test does not cover required chat-style commands")
+    if "block_reason" not in llm_text or "Blocked by Agent safety policy" not in llm_text:
         warnings.append("scripts/llm.py does not include dangerous-command blocking logic")
-    forbidden_llm_exec = ["subprocess", "os.system", "Popen", "exec_command", "scripts/eval.py bench"]
+    forbidden_llm_exec = ["os.system", "Popen", "exec_command"]
     for item in forbidden_llm_exec:
         if item in llm_text:
             warnings.append(f"scripts/llm.py may execute forbidden workflow: {item}")
+    if "scripts/eval.py bench --config config/candidate.yaml" not in llm_text or "No safe benchmark command was found" not in llm_text:
+        warnings.append("scripts/llm.py does not keep benchmark execution blocked")
     forbidden_write_markers = [
         "predictions.jsonl').write",
         'predictions.jsonl").write',
@@ -437,11 +448,24 @@ def run_clean(args: argparse.Namespace) -> None:
         warnings.append("README appears to claim LLM improves model F1")
     if "pair-prior" in readme_text.lower() and "optional" not in readme_text.lower():
         warnings.append("README references pair-prior without optional/probe framing")
-    if "read-only" not in readme_text.lower() or "does not run training" not in readme_text.lower():
+    readme_lower = readme_text.lower()
+    if "read-only" not in readme_lower or "does not run training" not in readme_lower:
         warnings.append("README does not document Agent shell read-only safety")
     for command in ["inspect outputs/candidate", "trace config/candidate.yaml", "compare outputs/candidate", "case outputs/candidate", "doctor outputs/candidate"]:
         if command not in readme_text:
             warnings.append(f"README does not document Agent diagnostic command: {command}")
+    for phrase in [
+        "candidate training requires explicit confirmation",
+        "unsafe benchmark",
+        "max_api_calls",
+        "max_tokens_total",
+        "timeout",
+        "repeated prompt",
+        "keeps the most recent 10",
+        "concise",
+    ]:
+        if phrase not in readme_lower:
+            warnings.append(f"README does not document Agent shell guard: {phrase}")
     if "agent" in candidate_text.lower() or "llm" in candidate_text.lower():
         warnings.append("config/candidate.yaml references agent or llm")
 

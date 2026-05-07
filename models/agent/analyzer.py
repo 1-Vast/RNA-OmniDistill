@@ -616,9 +616,11 @@ def dataset_summary(path: Path, max_rows: int | None = None) -> dict[str, Any]:
 class RNAAnalysisAgent:
     """LLM-backed analysis agent that never participates in model inference."""
 
-    def __init__(self, dry_run: bool = False, model: str | None = None) -> None:
+    def __init__(self, dry_run: bool = False, model: str | None = None, timeout: int = 60, max_retries: int = 2) -> None:
         self.dry_run = dry_run
         self.model_override = model
+        self.timeout = int(timeout)
+        self.max_retries = int(max_retries)
 
     def call(self, user_prompt: str) -> str:
         if self.dry_run:
@@ -642,14 +644,19 @@ class RNAAnalysisAgent:
             },
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=120) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise SystemExit(f"LLM request failed with HTTP {exc.code}: {body[:500]}") from exc
-        except urllib.error.URLError as exc:
-            raise SystemExit(f"LLM request failed: {exc.reason}") from exc
+        last_error = None
+        for _ in range(max(1, self.max_retries + 1)):
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                last_error = f"LLM request failed with HTTP {exc.code}: {body[:500]}"
+            except urllib.error.URLError as exc:
+                last_error = f"LLM request failed: {exc.reason}"
+        else:
+            raise SystemExit(last_error or "LLM request failed.")
         try:
             return data["choices"][0]["message"]["content"].strip()
         except (KeyError, IndexError, TypeError) as exc:

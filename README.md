@@ -141,10 +141,30 @@ agent> diagnose outputs/candidate
 agent> schedule outputs/candidate config/candidate.yaml
 agent> report release/model_card.md release/results_summary.md release/limitations.md
 agent> auditdata dataset/archive/train.jsonl dataset/archive/test.jsonl
+agent> 运行 smoke
+agent> 运行 audit
+agent> 检查 candidate
+agent> 综合诊断
+agent> 清理旧报告，只保留10次
+agent> /usage
+agent> /cleanup 10
+agent> /quiet
+agent> /normal
 agent> /exit
 ```
 
-The shell is read-only. It does not run training, does not run benchmark inference, and does not modify labels, predictions, metrics, checkpoints, or configs. Use `--dry_run` or `--no_api` to generate prompts without API calls.
+The shell is read-only by default. It does not run training, does not run benchmark inference, and does not modify labels, predictions, metrics, checkpoints, or configs. Use `--dry_run` or `--no_api` to generate prompts without API calls.
+
+Interactive Agent Shell with Safety Guards:
+
+- Agent can execute only safe whitelisted commands by default: smoke, clean audit, Agent `py_compile`, read-only diagnostics, cleanup, usage, and `git status --short`.
+- Training and benchmark execution are blocked by default.
+- Candidate training requires explicit confirmation: after `agent> 训练 candidate`, reply exactly `进行训练`. In dry-run mode this only prints the planned command.
+- Unsafe benchmark execution remains blocked unless a documented safe dry-run benchmark exists.
+- API calls are limited by `max_api_calls`, `max_tokens_total`, `timeout`, retry count, and repeated prompt guard.
+- `/cleanup` keeps the most recent 10 report directories by default and only cleans safe `outputs/llm*` locations.
+- The interface is concise by default. Use `/quiet`, `/normal`, or `/verbose` to change shell output detail.
+- The Agent gives a short, concrete recommendation after each command.
 
 Training and inference diagnostics:
 
