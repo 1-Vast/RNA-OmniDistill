@@ -474,6 +474,7 @@ def decode_one_nussinov_worker(payload: dict) -> dict:
             token_pair_compatibility=prior,
             token_alpha=float(payload.get("token_alpha", 0.0)),
             input_is_logit=True,
+            pair_prior_alpha=float(payload.get("pair_prior_alpha", 0.0)),
         )
         result = row(
             "model",
@@ -573,6 +574,7 @@ def decode_staged_nussinov(stage: dict, args: argparse.Namespace, config: dict, 
                 "gamma": gamma,
                 "source": source,
                 "token_alpha": float(args.token_alpha),
+                "pair_prior_alpha": float(args.pair_prior_alpha) if args.pair_prior == "auto" else 0.0,
             }
         )
     start = time.time()
@@ -637,6 +639,8 @@ def run_scan(args: argparse.Namespace, config: dict, stage: dict, out_dir: Path,
         scan_args.gamma = spec.get("gamma", args.gamma)
         scan_args.source = spec.get("source", args.source or "pair")
         scan_args.token_alpha = float(spec.get("token_alpha", args.token_alpha))
+        scan_args.pair_prior = spec.get("pair_prior", args.pair_prior)
+        scan_args.pair_prior_alpha = float(spec.get("pair_prior_alpha", args.pair_prior_alpha))
         scan_args.out = str(item_out / "benchmark.json")
         scan_args.workers = args.workers
         scan_args.chunksize = args.chunksize
@@ -770,6 +774,8 @@ def finalize_benchmark(
         "gamma": args.gamma if args.gamma is not None else config["decoding"].get("nussinov_gamma", 2.0),
         "source": args.source or "pair",
         "token_alpha": float(args.token_alpha),
+        "pair_prior": args.pair_prior,
+        "pair_prior_alpha": float(args.pair_prior_alpha) if args.pair_prior == "auto" else 0.0,
         "start_time": datetime.fromtimestamp(start_time).isoformat(),
         "end_time": datetime.now().isoformat(),
     }
@@ -1085,6 +1091,8 @@ def run_export(args: argparse.Namespace) -> None:
     args.gamma = None
     args.source = "pair"
     args.token_alpha = 0.0
+    args.pair_prior = "none"
+    args.pair_prior_alpha = 0.0
     args.scan = None
     run_bench(args)
 
@@ -1173,6 +1181,8 @@ def main() -> None:
     bench.add_argument("--gamma", type=float)
     bench.add_argument("--source", choices=["pair", "hybrid"], default="pair")
     bench.add_argument("--token_alpha", type=float, default=0.0)
+    bench.add_argument("--pair_prior", choices=["none", "auto"], default="none")
+    bench.add_argument("--pair_prior_alpha", type=float, default=0.0)
     bench.add_argument("--scan")
     bench.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     bench.set_defaults(func=run_bench)

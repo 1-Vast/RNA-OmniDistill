@@ -128,6 +128,8 @@ def nussinov_decode(
     token_pair_compatibility: torch.Tensor | None = None,
     token_alpha: float = 0.25,
     input_is_logit: bool = False,
+    pair_prior: "np.ndarray | None" = None,
+    pair_prior_alpha: float = 0.0,
 ) -> str:
     """Decode a non-pseudoknotted dot-bracket structure from pair logits/probabilities.
 
@@ -158,6 +160,19 @@ def nussinov_decode(
         else:
             prior = np.asarray(token_pair_compatibility, dtype=np.float32)
         score_matrix = score_matrix + float(token_alpha) * prior[:length, :length]
+
+    # Apply biological pair-prior (optional inference-time enhancement)
+    if pair_prior is not None and pair_prior_alpha > 0:
+        if isinstance(pair_prior, torch.Tensor):
+            pp = pair_prior.detach().float().cpu().numpy()
+        else:
+            pp = np.asarray(pair_prior, dtype=np.float32)
+        score_matrix = score_matrix + float(pair_prior_alpha) * pp[:length, :length]
+    elif pair_prior_alpha > 0 and pair_prior is None:
+        # Auto-build pair-prior from sequence
+        from models.pairprior import build_pair_prior_matrix
+        pp = build_pair_prior_matrix(seq, alpha=pair_prior_alpha)
+        score_matrix = score_matrix + pp[:length, :length]
 
     valid_mask = np.zeros((length, length), dtype=bool)
     for i in range(length):
@@ -357,6 +372,8 @@ def generate_structure_seq2struct(
     seq: str,
     decoding_config: dict,
     device: torch.device | str = "cpu",
+    pair_prior: "np.ndarray | None" = None,
+    pair_prior_alpha: float = 0.0,
 ) -> str:
     seq = seq.upper().replace("T", "U")
     struct = "." * len(seq)
@@ -376,6 +393,8 @@ def generate_structure_seq2struct(
                 pair_threshold=float(decoding_config.get("pair_threshold", 0.5)),
                 nussinov_gamma=float(decoding_config.get("nussinov_gamma", 1.0)),
                 input_is_logit=True,
+                pair_prior=pair_prior,
+                pair_prior_alpha=pair_prior_alpha,
             )
     input_ids = entropy_iterative_unmask(
         model,
