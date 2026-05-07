@@ -146,6 +146,18 @@ agent> /exit
 
 The shell is read-only. It does not run training, does not run benchmark inference, and does not modify labels, predictions, metrics, checkpoints, or configs. Use `--dry_run` or `--no_api` to generate prompts without API calls.
 
+Training and inference diagnostics:
+
+```text
+agent> inspect outputs/candidate
+agent> trace config/candidate.yaml outputs/candidate/best.pt outputs/candidate/benchmark.json
+agent> compare outputs/candidate outputs/oldbase
+agent> case outputs/candidate/predictions.jsonl
+agent> doctor outputs/candidate config/candidate.yaml
+```
+
+These commands inspect existing artifacts only. They help identify training instability, benchmark provenance mismatch, pair-count issues, and sample-level failure modes.
+
 ## What Not To Claim
 
 - Do not claim LLM semantic conditioning as a positive result. It was tested and did not improve the model-level result.

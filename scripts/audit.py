@@ -385,6 +385,11 @@ def run_clean(args: argparse.Namespace) -> None:
         warnings.append("scripts/llm.py does not expose agent shell subcommand")
     if "agent_test" not in llm_text:
         warnings.append("scripts/llm.py does not expose agent_test")
+    for command in ["inspect", "trace", "compare", "case", "doctor"]:
+        if command not in llm_text:
+            warnings.append(f"scripts/llm.py does not support {command}")
+    if not all(command in llm_text for command in ["inspect outputs/candidate", "trace config/candidate.yaml", "compare outputs/candidate", "case outputs/candidate", "doctor outputs/candidate"]):
+        warnings.append("agent_test does not cover all new diagnostic commands")
     if "safety_block_reason" not in llm_text or "Blocked by Agent safety policy" not in llm_text:
         warnings.append("scripts/llm.py does not include dangerous-command blocking logic")
     forbidden_llm_exec = ["subprocess", "os.system", "Popen", "exec_command", "scripts/eval.py bench"]
@@ -434,6 +439,9 @@ def run_clean(args: argparse.Namespace) -> None:
         warnings.append("README references pair-prior without optional/probe framing")
     if "read-only" not in readme_text.lower() or "does not run training" not in readme_text.lower():
         warnings.append("README does not document Agent shell read-only safety")
+    for command in ["inspect outputs/candidate", "trace config/candidate.yaml", "compare outputs/candidate", "case outputs/candidate", "doctor outputs/candidate"]:
+        if command not in readme_text:
+            warnings.append(f"README does not document Agent diagnostic command: {command}")
     if "agent" in candidate_text.lower() or "llm" in candidate_text.lower():
         warnings.append("config/candidate.yaml references agent or llm")
 

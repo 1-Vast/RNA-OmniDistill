@@ -11,11 +11,29 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from models.agent.analyzer import RNAAnalysisAgent, write_report
+from models.agent.analyzer import (
+    RNAAnalysisAgent,
+    case_analysis,
+    case_markdown,
+    compare_markdown,
+    compare_runs,
+    inspect_markdown,
+    inspect_run_artifacts,
+    trace_markdown,
+    trace_provenance,
+    write_json,
+    write_markdown,
+    write_report,
+)
 
 
 HELP_TEXT = """Built-in commands:
   diagnose <run_dir>
+  inspect <run_dir>
+  trace <config_path> <ckpt_path> <benchmark_json>
+  compare <run_a> <run_b>
+  case <predictions_jsonl>
+  doctor <run_dir> <config_path>
   schedule <run_dir> <config_path>
   report <file1> <file2> ...
   auditdata <jsonl1> <jsonl2> ...
@@ -77,11 +95,14 @@ def safety_block_reason(raw: str, parsed_command: str | None = None) -> str | No
     for pattern in ACTION_BLOCK_PATTERNS:
         if pattern in lowered:
             return pattern.strip()
-    if parsed_command not in {"diagnose", "report"}:
+    if parsed_command not in {"diagnose", "inspect", "trace", "compare", "case", "doctor", "report"}:
         for pattern in [" predictions.jsonl", " benchmark.json"]:
             if pattern in lowered:
                 return pattern.strip()
-    for pattern in TOKEN_BLOCK_PATTERNS:
+    token_patterns = TOKEN_BLOCK_PATTERNS
+    if parsed_command == "trace":
+        token_patterns = [item for item in TOKEN_BLOCK_PATTERNS if item.strip() not in {"checkpoint", "best.pt"}]
+    for pattern in token_patterns:
         if pattern in lowered:
             return pattern.strip()
     return None
@@ -136,6 +157,100 @@ def run_auditdata(args: argparse.Namespace) -> None:
     write_report(Path(args.out), "dataaudit", data, markdown)
 
 
+def write_rule_outputs(out: Path, stem: str, result: dict, lines: list[str], data: dict, prompt: str, dry_run: bool, agent: RNAAnalysisAgent) -> None:
+    out.mkdir(parents=True, exist_ok=True)
+    write_json(out / f"{stem}.json", result)
+    write_markdown(out / f"{stem}.md", lines)
+    write_json(out / "request.json", {**data, "prompt": prompt})
+    write_markdown(out / "prompt.md", [prompt])
+    if not dry_run:
+        write_markdown(out / "response.md", [agent.call(prompt)])
+    print(f"Wrote {out}")
+
+
+def run_inspect(args: argparse.Namespace) -> None:
+    agent = RNAAnalysisAgent(dry_run=args.dry_run)
+    result = inspect_run_artifacts(Path(args.run))
+    data, prompt = agent.build_inspect_prompt(result)
+    write_rule_outputs(Path(args.out), "inspect", result, inspect_markdown(result), data, prompt, args.dry_run, agent)
+
+
+def run_trace(args: argparse.Namespace) -> None:
+    agent = RNAAnalysisAgent(dry_run=args.dry_run)
+    result = trace_provenance(Path(args.config), Path(args.ckpt), Path(args.benchmark))
+    data, prompt = agent.build_trace_prompt(result)
+    write_rule_outputs(Path(args.out), "trace", result, trace_markdown(result), data, prompt, args.dry_run, agent)
+
+
+def run_compare(args: argparse.Namespace) -> None:
+    agent = RNAAnalysisAgent(dry_run=args.dry_run)
+    result = compare_runs(Path(args.a), Path(args.b))
+    data, prompt = agent.build_compare_prompt(result)
+    write_rule_outputs(Path(args.out), "compare", result, compare_markdown(result), data, prompt, args.dry_run, agent)
+
+
+def run_case(args: argparse.Namespace) -> None:
+    agent = RNAAnalysisAgent(dry_run=args.dry_run)
+    result = case_analysis(Path(args.pred), top_bad=args.top_bad, top_good=args.top_good)
+    data, prompt = agent.build_case_prompt(result)
+    out = Path(args.out)
+    write_rule_outputs(out, "case_summary", result, case_markdown(result), data, prompt, args.dry_run, agent)
+    write_markdown(out / "case_report.md", case_markdown(result))
+    with (out / "bad_cases.jsonl").open("w", encoding="utf-8") as handle:
+        for row in result.get("bad_cases", []):
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    with (out / "good_cases.jsonl").open("w", encoding="utf-8") as handle:
+        for row in result.get("good_cases", []):
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def run_doctor(args: argparse.Namespace) -> None:
+    agent = RNAAnalysisAgent(dry_run=args.dry_run)
+    out = Path(args.out)
+    run_dir = Path(args.run)
+    config = Path(args.config)
+    inspect_result = inspect_run_artifacts(run_dir)
+    trace_result = trace_provenance(config, run_dir / "best.pt", run_dir / "benchmark.json")
+    cases_result = case_analysis(run_dir / "predictions.jsonl")
+    write_json(out / "inspect" / "inspect.json", inspect_result)
+    write_markdown(out / "inspect" / "inspect.md", inspect_markdown(inspect_result))
+    write_json(out / "trace" / "trace.json", trace_result)
+    write_markdown(out / "trace" / "trace.md", trace_markdown(trace_result))
+    write_json(out / "cases" / "case_summary.json", cases_result)
+    write_markdown(out / "cases" / "case_report.md", case_markdown(cases_result))
+    should_run = "yes" if inspect_result.get("warnings") or trace_result.get("warnings") else "no"
+    ratio = inspect_result.get("pair_count_ratio")
+    should_change = "yes" if ratio is not None and not (0.5 <= float(ratio) <= 1.5) else "no"
+    should_update = "no" if trace_result.get("provenance_mismatch_risk") else "yes"
+    result = {
+        "inspect": inspect_result,
+        "trace": trace_result,
+        "cases": {
+            "rows": cases_result.get("rows"),
+            "missing_fields": cases_result.get("missing_fields"),
+            "reason_counts": dict(cases_result.get("reason_counts", {})),
+            "avg_pair_f1": cases_result.get("avg_pair_f1"),
+        },
+        "should_run_more_experiments": should_run,
+        "should_change_model": should_change,
+        "should_update_paper_table": should_update,
+    }
+    data, prompt = agent.build_doctor_prompt(result)
+    lines = [
+        "# Doctor Report",
+        "",
+        f"- run health: {inspect_result.get('status')}",
+        f"- training health warnings: {len(inspect_result.get('warnings', []))}",
+        f"- inference provenance: {trace_result.get('status')}",
+        f"- benchmark consistency: {'risk' if trace_result.get('provenance_mismatch_risk') else 'ok'}",
+        f"- sample failure modes: {dict(cases_result.get('reason_counts', {}))}",
+        f"- should_run_more_experiments: {should_run}",
+        f"- should_change_model: {should_change}",
+        f"- should_update_paper_table: {should_update}",
+    ]
+    write_rule_outputs(out, "doctor", result, lines, data, prompt, args.dry_run, agent)
+
+
 def path_tokens(text: str) -> list[str]:
     return re.findall(r"(?:outputs|config|release|dataset|docs)[A-Za-z0-9_./\\-]*(?:\.yaml|\.yml|\.md|\.jsonl|/candidate|\\candidate)?", text)
 
@@ -173,6 +288,50 @@ def parse_agent_command(raw: str) -> tuple[str, list[str], str | None]:
     return "unknown", [], prefix_mode
 
 
+def parse_agent_command(raw: str) -> tuple[str, list[str], str | None]:
+    text = raw.strip()
+    if not text:
+        return "empty", [], None
+    try:
+        parts = shlex.split(text)
+    except ValueError:
+        parts = text.split()
+    if not parts:
+        return "empty", [], None
+    prefix_mode = None
+    if parts[0] in {"dry", "live"}:
+        prefix_mode = parts[0]
+        parts = parts[1:]
+        if not parts:
+            return "empty", [], prefix_mode
+    command = parts[0].lower()
+    commands = {"diagnose", "inspect", "trace", "compare", "case", "doctor", "schedule", "report", "auditdata"}
+    if command in commands:
+        return command, parts[1:], prefix_mode
+
+    paths = path_tokens(text)
+    lowered = text.lower()
+    if any(key in lowered for key in ["诊断", "diagnose"]):
+        return "diagnose", paths[:1], prefix_mode
+    if any(key in lowered for key in ["体检", "检查训练", "inspect"]):
+        return "inspect", paths[:1], prefix_mode
+    if any(key in lowered for key in ["追踪", "推理链路", "trace"]):
+        return "trace", paths[:3], prefix_mode
+    if any(key in lowered for key in ["对比", "compare"]):
+        return "compare", paths[:2], prefix_mode
+    if any(key in lowered for key in ["错误样本", "样本分析", "case"]):
+        return "case", paths[:1], prefix_mode
+    if any(key in lowered for key in ["综合诊断", "一键诊断", "doctor"]):
+        return "doctor", paths[:2], prefix_mode
+    if any(key in lowered for key in ["计划", "调度", "schedule", "下一步"]):
+        return "schedule", paths[:2], prefix_mode
+    if any(key in lowered for key in ["报告", "总结", "report", "整理"]):
+        return "report", paths, prefix_mode
+    if any(key in lowered for key in ["数据审计", "审计", "auditdata"]):
+        return "auditdata", paths, prefix_mode
+    return "unknown", [], prefix_mode
+
+
 def write_history(path: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
@@ -190,6 +349,37 @@ def build_shell_prompt(agent: RNAAnalysisAgent, command: str, args: list[str]) -
         if len(args) != 1:
             raise ValueError("Usage: diagnose <run_dir>")
         return agent.build_diagnose_prompt(require_dir_for_shell(Path(args[0])))
+    if command == "inspect":
+        if len(args) != 1:
+            raise ValueError("Usage: inspect <run_dir>")
+        result = inspect_run_artifacts(require_dir_for_shell(Path(args[0])))
+        return agent.build_inspect_prompt(result)
+    if command == "trace":
+        if len(args) != 3:
+            raise ValueError("Usage: trace <config_path> <ckpt_path> <benchmark_json>")
+        result = trace_provenance(require_file_for_shell(Path(args[0])), Path(args[1]), Path(args[2]))
+        return agent.build_trace_prompt(result)
+    if command == "compare":
+        if len(args) != 2:
+            raise ValueError("Usage: compare <run_a> <run_b>")
+        result = compare_runs(require_dir_for_shell(Path(args[0])), require_dir_for_shell(Path(args[1])))
+        return agent.build_compare_prompt(result)
+    if command == "case":
+        if len(args) != 1:
+            raise ValueError("Usage: case <predictions_jsonl>")
+        result = case_analysis(Path(args[0]))
+        return agent.build_case_prompt(result)
+    if command == "doctor":
+        if len(args) != 2:
+            raise ValueError("Usage: doctor <run_dir> <config_path>")
+        run_dir = require_dir_for_shell(Path(args[0]))
+        config = require_file_for_shell(Path(args[1]))
+        result = {
+            "inspect": inspect_run_artifacts(run_dir),
+            "trace": trace_provenance(config, run_dir / "best.pt", run_dir / "benchmark.json"),
+            "cases": case_analysis(run_dir / "predictions.jsonl"),
+        }
+        return agent.build_doctor_prompt(result)
     if command == "schedule":
         if len(args) != 2:
             raise ValueError("Usage: schedule <run_dir> <config_path>")
@@ -387,6 +577,11 @@ def run_agent_test(args: argparse.Namespace) -> None:
         "/help",
         "/status",
         "diagnose outputs/candidate",
+        "inspect outputs/candidate",
+        "trace config/candidate.yaml outputs/candidate/best.pt outputs/candidate/benchmark.json",
+        "compare outputs/candidate outputs/oldbase",
+        "case outputs/candidate/predictions.jsonl",
+        "doctor outputs/candidate config/candidate.yaml",
         "schedule outputs/candidate config/candidate.yaml",
         "report release/model_card.md release/results_summary.md release/limitations.md",
         "auditdata dataset/archive/train.jsonl dataset/archive/test.jsonl",
@@ -403,8 +598,8 @@ def run_agent_test(args: argparse.Namespace) -> None:
     prompt_dirs = [p for p in (out / "turns").glob("*") if (p / "prompt.md").exists()]
     if len(blocked) < 2:
         raise SystemExit("agent_test failed: dangerous commands were not blocked.")
-    if len(prompt_dirs) < 4:
-        raise SystemExit("agent_test failed: expected at least 4 prompt turns.")
+    if len(prompt_dirs) < 8:
+        raise SystemExit("agent_test failed: expected at least 8 prompt turns.")
     print(f"agent_test PASS -> {out}")
 
 
@@ -430,6 +625,32 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose = sub.add_parser("diagnose", parents=[common], help="Diagnose one run directory.")
     diagnose.add_argument("--run", required=True)
     diagnose.set_defaults(func=run_diagnose)
+
+    inspect = sub.add_parser("inspect", parents=[common], help="Rule-based run inspection plus optional LLM summary.")
+    inspect.add_argument("--run", required=True)
+    inspect.set_defaults(func=run_inspect)
+
+    trace = sub.add_parser("trace", parents=[common], help="Check benchmark and checkpoint provenance.")
+    trace.add_argument("--config", required=True)
+    trace.add_argument("--ckpt", required=True)
+    trace.add_argument("--benchmark", required=True)
+    trace.set_defaults(func=run_trace)
+
+    compare = sub.add_parser("compare", parents=[common], help="Compare two run directories.")
+    compare.add_argument("--a", required=True)
+    compare.add_argument("--b", required=True)
+    compare.set_defaults(func=run_compare)
+
+    case = sub.add_parser("case", parents=[common], help="Analyze sample-level prediction cases.")
+    case.add_argument("--pred", required=True)
+    case.add_argument("--top_bad", type=int, default=20)
+    case.add_argument("--top_good", type=int, default=20)
+    case.set_defaults(func=run_case)
+
+    doctor = sub.add_parser("doctor", parents=[common], help="Run inspect, trace, case, and combined diagnosis.")
+    doctor.add_argument("--run", required=True)
+    doctor.add_argument("--config", required=True)
+    doctor.set_defaults(func=run_doctor)
 
     schedule = sub.add_parser("schedule", parents=[common], help="Suggest safe next experiments.")
     schedule.add_argument("--run", required=True)
