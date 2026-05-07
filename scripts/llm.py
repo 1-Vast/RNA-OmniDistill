@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -31,6 +30,19 @@ from models.agent.analyzer import (
     write_json,
     write_markdown,
 )
+from models.agent.cleanup import cleanup_reports, safe_root, validate_cleanup_request
+from models.agent.memory import append_memory, read_recent_memory, sanitize_text
+from models.agent.runtime import AgentRuntimeGuard, prompt_hash, sync_guard_state
+from models.agent.safety import (
+    CONFIRM_BENCH,
+    CONFIRM_TRAIN,
+    SAFE_AUDIT,
+    SAFE_COMPILE,
+    SAFE_SMOKE,
+    TRAIN_COMMAND,
+    block_reason,
+    validate_confirmed_command,
+)
 
 
 HELP_TEXT = """Built-in commands:
@@ -50,6 +62,7 @@ Slash commands:
   /help
   /status
   /usage
+  /memory
   /cleanup [keep]
   /last
   /open
@@ -67,33 +80,6 @@ Safety:
   Agent is read-only by default.
   It never runs benchmark by default.
   Candidate training requires exact user confirmation."""
-
-CONFIRM_TRAIN = {
-    "\u8fdb\u884c\u8bad\u7ec3",
-    "\u8fdb\u884c\u8bad\u7ec3 candidate",
-    "\u786e\u8ba4\u8bad\u7ec3",
-    "\u786e\u8ba4\u8bad\u7ec3 candidate",
-    "\u6267\u884c\u8bad\u7ec3",
-    "\u6267\u884c\u8bad\u7ec3 candidate",
-    "yes train",
-    "yes train candidate",
-    "run train",
-    "run train candidate",
-    "execute train",
-}
-CONFIRM_BENCH = {
-    "\u8fdb\u884c benchmark",
-    "\u786e\u8ba4 benchmark",
-    "\u6267\u884c benchmark",
-    "yes benchmark",
-    "run benchmark",
-    "execute benchmark",
-}
-TRAIN_COMMAND = [sys.executable, "main.py", "train", "--config", "config/candidate.yaml", "--device", "cuda"]
-SAFE_COMPILE = [sys.executable, "-m", "py_compile", "models/agent/analyzer.py", "scripts/llm.py"]
-SAFE_SMOKE = [sys.executable, "main.py", "smoke"]
-SAFE_AUDIT = [sys.executable, "scripts/audit.py", "clean", "--out", "outputs/clean"]
-
 
 def require_file(path: Path) -> Path:
     if not path.exists() or not path.is_file():
@@ -171,77 +157,6 @@ def emit_agent_outputs(
 ) -> None:
     llm = agent or make_agent(args)
     write_rule_outputs(out, stem, result, lines, data, prompt, args.dry_run, llm, standalone_guard(args, out, args.dry_run))
-
-
-class AgentRuntimeGuard:
-    def __init__(
-        self,
-        out: Path,
-        max_api_calls: int = 20,
-        max_tokens_total: int = 20000,
-        max_same_prompt: int = 2,
-        mode: str = "dry_run",
-    ) -> None:
-        self.out = out
-        self.max_api_calls = int(max_api_calls)
-        self.max_tokens_total = int(max_tokens_total)
-        self.max_same_prompt = int(max_same_prompt)
-        self.mode = mode
-        self.api_calls = 0
-        self.estimated_tokens = 0
-        self.prompt_hash_counts: dict[str, int] = {}
-
-    def estimate_tokens(self, prompt: str) -> int:
-        return max(1, len(prompt) // 4)
-
-    def check_before_call(self, prompt: str, last_command: str | None = None) -> tuple[bool, dict[str, Any]]:
-        ph = prompt_hash(prompt)
-        repeated = self.prompt_hash_counts.get(ph, 0)
-        estimated = self.estimate_tokens(prompt)
-        reason = None
-        if self.api_calls >= self.max_api_calls:
-            reason = "max_api_calls"
-        elif self.estimated_tokens + estimated > self.max_tokens_total:
-            reason = "max_tokens_total"
-        elif repeated >= self.max_same_prompt:
-            reason = "same_prompt_repeated"
-        data = {
-            "stop_reason": reason,
-            "api_calls": self.api_calls,
-            "estimated_tokens": self.estimated_tokens,
-            "prompt_hash": ph,
-            "repeated_count": repeated,
-            "last_command": last_command,
-            "recommended_action": "Switch to /dry, reduce input files, or start a new shell.",
-        }
-        return reason is None, data
-
-    def record_call(self, prompt: str, response_usage: dict[str, Any] | None = None) -> None:
-        if self.mode == "dry_run":
-            return
-        ph = prompt_hash(prompt)
-        self.prompt_hash_counts[ph] = self.prompt_hash_counts.get(ph, 0) + 1
-        usage_total = None
-        if response_usage:
-            try:
-                usage_total = int(response_usage.get("total_tokens"))
-            except (TypeError, ValueError):
-                usage_total = None
-        self.api_calls += 1
-        self.estimated_tokens += usage_total if usage_total is not None else self.estimate_tokens(prompt)
-
-    def write_limit_stop(self, target: Path, data: dict[str, Any]) -> None:
-        write_json(target / "limit_stop.json", data)
-        write_markdown(target / "limit_stop.md", ["# Agent Limit Stop", "", *[f"- {key}: {value}" for key, value in data.items()]])
-
-    def snapshot(self) -> dict[str, Any]:
-        return {
-            "api_calls": self.api_calls,
-            "max_api_calls": self.max_api_calls,
-            "estimated_tokens": self.estimated_tokens,
-            "max_tokens_total": self.max_tokens_total,
-            "repeated_prompt_count": max(self.prompt_hash_counts.values()) if self.prompt_hash_counts else 0,
-        }
 
 
 def run_diagnose(args: argparse.Namespace) -> None:
@@ -354,106 +269,6 @@ def run_doctor(args: argparse.Namespace) -> None:
     emit_agent_outputs(args, out, "doctor", result, lines, data, prompt, agent)
 
 
-def normalize_root(path: Path) -> Path:
-    return (ROOT / path).resolve() if not path.is_absolute() else path.resolve()
-
-
-def safe_root(root: Path) -> bool:
-    resolved = normalize_root(root)
-    try:
-        resolved.relative_to(ROOT)
-    except ValueError:
-        return False
-    allowed = [
-        ROOT / "outputs" / "llm",
-        ROOT / "outputs" / "llm_shell",
-        ROOT / "outputs" / "llm_shell_test",
-        ROOT / "outputs" / "llm_test",
-    ]
-    server_root = ROOT / "outputs"
-    if resolved.name.startswith("llm_server_") and resolved.parent == server_root.resolve():
-        allowed.append(resolved)
-    blocked = [ROOT / item for item in ["dataset", "config", "models", "scripts", "release", "docs", ".git"]]
-    return any(resolved == item.resolve() or item.resolve() in resolved.parents for item in allowed) and not any(
-        resolved == item.resolve() or item.resolve() in resolved.parents for item in blocked
-    )
-
-
-def validate_cleanup_request(root: Path, keep: int = 10) -> dict[str, Any]:
-    original_keep = keep
-    warnings = []
-    if keep < 1:
-        keep = 10
-        warnings.append("keep < 1 normalized to 10")
-    safe = safe_root(root)
-    return {
-        "root": str(root),
-        "keep": original_keep,
-        "normalized_keep": keep,
-        "safe": safe,
-        "status": "PASS" if safe else "blocked",
-        "warnings": warnings,
-        "errors": [] if safe else ["unsafe root"],
-    }
-
-
-def cleanup_reports(root: Path, keep: int = 10, dry_run: bool = False) -> dict[str, Any]:
-    validation = validate_cleanup_request(root, keep=keep)
-    keep = int(validation["normalized_keep"])
-    if validation["status"] == "blocked":
-        return {**validation, "dry_run": dry_run, "kept_dirs": [], "removed_dirs": []}
-    root.mkdir(parents=True, exist_ok=True)
-    base_dirs = list((root / "turns").iterdir()) if (root / "turns").exists() else []
-    if not base_dirs:
-        base_dirs = [path for path in root.iterdir() if path.is_dir()]
-    candidates = [
-        path for path in base_dirs
-        if any((path / name).exists() for name in ["prompt.md", "response.md", "inspect.md", "doctor.md", "case_report.md", "request.json", "blocked.md", "error.md"])
-    ]
-    ordered = sorted(candidates, key=lambda item: item.stat().st_mtime, reverse=True)
-    kept = ordered[: max(0, keep)]
-    removed = ordered[max(0, keep):]
-    errors = []
-    if not dry_run:
-        for directory in sorted(removed, key=lambda item: len(item.parts), reverse=True):
-            try:
-                for item in sorted(directory.rglob("*"), key=lambda child: len(child.parts), reverse=True):
-                    if item.is_file():
-                        item.unlink()
-                    elif item.is_dir():
-                        item.rmdir()
-                directory.rmdir()
-            except OSError as exc:
-                errors.append(f"{directory}: {exc}")
-    report = {
-        "root": str(root),
-        "keep": validation["keep"],
-        "normalized_keep": validation["normalized_keep"],
-        "total_dirs": len(ordered),
-        "kept_dirs": [str(item) for item in kept],
-        "removed_dirs": [str(item) for item in removed],
-        "dry_run": dry_run,
-        "errors": errors,
-        "warnings": validation["warnings"],
-        "status": "PASS" if not errors else "WARN",
-    }
-    write_json(root / "cleanup_report.json", report)
-    write_markdown(root / "cleanup_report.md", [
-        "# Cleanup Report",
-        "",
-        f"- root: {root}",
-        f"- keep: {validation['keep']}",
-        f"- normalized_keep: {keep}",
-        f"- total_dirs: {len(ordered)}",
-        f"- kept: {len(kept)}",
-        f"- removed: {len(removed)}",
-        f"- dry_run: {dry_run}",
-        f"- errors: {len(errors)}",
-        f"- warnings: {len(validation['warnings'])}",
-    ])
-    return report
-
-
 def run_cleanup(args: argparse.Namespace) -> None:
     report = cleanup_reports(Path(args.root), keep=args.keep, dry_run=args.dry_run)
     if report["status"] == "blocked":
@@ -527,8 +342,7 @@ INTENT_RULES = [
     IntentRule("safe_audit", ("clean audit", "运行 audit", "运行审计", "清理检查")),
     IntentRule("safe_compile", ("编译 agent", "检查 llm.py", "py_compile")),
     IntentRule("cleanup", ("cleanup", "清理旧报告", "保留"), parse_keep=True),
-    IntentRule("benchmark_candidate", ("benchmark", "跑 benchmark")),
-    IntentRule("train_candidate", ("train", "训练")),
+    IntentRule("show_memory", ("查看记忆", "memory", "调参记录", "历史结论")),
     IntentRule("doctor", ("doctor", "综合诊断", "一键诊断"), ("outputs/candidate", "config/candidate.yaml"), 2),
     IntentRule("inspect", ("inspect", "检查 candidate", "体检 candidate", "检查训练"), ("outputs/candidate",), 1),
     IntentRule("trace", ("trace", "追踪", "推理链路"), path_limit=3),
@@ -538,6 +352,18 @@ INTENT_RULES = [
     IntentRule("schedule", ("schedule", "计划", "调度", "下一步"), ("outputs/candidate", "config/candidate.yaml"), 2),
     IntentRule("report", ("report", "报告", "总结", "整理"), ("release/model_card.md", "release/results_summary.md", "release/limitations.md")),
     IntentRule("auditdata", ("auditdata", "数据审计", "审计"), ("dataset/archive/train.jsonl", "dataset/archive/test.jsonl")),
+    IntentRule("show_train_device", ("查看训练设备",)),
+    IntentRule("train_device_prompt", ("设置训练设备", "训练设备")),
+    IntentRule("set_local_train", ("本地训练", "local")),
+    IntentRule("set_remote_train", ("远程训练", "remote")),
+    IntentRule("set_cuda_train", ("使用 cuda", "device cuda")),
+    IntentRule("set_cpu_train", ("使用 cpu", "device cpu")),
+    IntentRule("set_target", ("设定目标", "目标 pair", "目标 valid", "最多调参")),
+    IntentRule("show_target", ("查看调参目标",)),
+    IntentRule("clear_target", ("清除调参目标",)),
+    IntentRule("start_target_train", ("开始目标训练",)),
+    IntentRule("benchmark_candidate", ("benchmark", "跑 benchmark")),
+    IntentRule("train_candidate", ("train", "训练")),
 ]
 
 
@@ -559,6 +385,8 @@ def parse_agent_command(raw: str) -> tuple[str, list[str], str | None]:
     direct = {"diagnose", "inspect", "trace", "compare", "case", "doctor", "schedule", "report", "auditdata"}
     if command in direct:
         return command, parts[1:], prefix_mode
+    if command == "ssh":
+        return "set_remote_login", parts, prefix_mode
     paths = path_tokens(text)
     lower = text.lower()
     for rule in INTENT_RULES:
@@ -569,28 +397,6 @@ def parse_agent_command(raw: str) -> tuple[str, list[str], str | None]:
             selected = paths[: rule.path_limit] if rule.path_limit is not None else paths
             return rule.command, selected or list(rule.default_args), prefix_mode
     return "unknown", [], prefix_mode
-
-
-DANGEROUS_ALWAYS = ["git push", "git commit", "git reset", "git checkout", "git clean", "&&", "||", ";", "|", ">", ">>", " rm ", " del ", "remove ", " mv ", " cp ", ".env", "api_key", "llm_api_key", "cuda_visible_devices", "pip install", "conda install", "curl ", "wget ", "config/fixed.yaml", "release/best_config.yaml"]
-DANGEROUS_WRITE = ["rm ", "del ", "remove ", "mv ", "cp ", "overwrite", "\u4fee\u6539\u914d\u7f6e", "\u5220\u9664", "\u8986\u76d6", ".env", "api_key", "llm_api_key", "cuda_visible_devices", "pip install", "conda install", "curl ", "wget "]
-DIAGNOSTIC_ARTIFACT_PATTERNS = ["benchmark.json", "predictions.jsonl", "best.pt", "checkpoint"]
-DIAGNOSTIC_COMMANDS = {"trace", "case", "doctor", "inspect", "compare", "diagnose", "report"}
-
-
-def block_reason(raw: str, command: str) -> str | None:
-    lower = raw.lower()
-    for item in DANGEROUS_ALWAYS:
-        if item in f" {lower} ":
-            return item
-    if command in {"train_candidate", "benchmark_candidate"}:
-        return None
-    blocked = list(DANGEROUS_WRITE)
-    if command not in DIAGNOSTIC_COMMANDS:
-        blocked.extend(DIAGNOSTIC_ARTIFACT_PATTERNS)
-    for item in blocked:
-        if item in lower:
-            return item
-    return None
 
 
 def run_subprocess_summary(cmd: list[str], timeout: int | None) -> tuple[str, str]:
@@ -643,6 +449,10 @@ def write_history(path: Path, record: dict[str, Any]) -> None:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def remember(state: dict[str, Any], kind: str, summary: str, data: dict[str, Any] | None = None) -> None:
+    append_memory(Path(state["memory"]), kind, summary, data)
+
+
 def shell_prompt(agent: RNAAnalysisAgent, command: str, args: list[str]) -> tuple[dict[str, Any], str]:
     if command == "diagnose":
         return agent.build_diagnose_prompt(Path(args[0]))
@@ -665,17 +475,6 @@ def shell_prompt(agent: RNAAnalysisAgent, command: str, args: list[str]) -> tupl
     raise ValueError("Could not parse command. Type /help for examples.")
 
 
-def prompt_hash(prompt: str) -> str:
-    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
-
-
-def sync_guard_state(state: dict[str, Any], guard: AgentRuntimeGuard) -> None:
-    snap = guard.snapshot()
-    state["api_calls"] = snap["api_calls"]
-    state["estimated_tokens"] = snap["estimated_tokens"]
-    state["prompt_hash_counts"] = dict(guard.prompt_hash_counts)
-
-
 def shell_status(state: dict[str, Any]) -> dict[str, Any]:
     return {
         "mode": state["mode"],
@@ -688,6 +487,7 @@ def shell_status(state: dict[str, Any]) -> dict[str, Any]:
         "max_turns": state["max_turns"],
         "out": str(state["out"]),
         "history": str(state["history"]),
+        "memory": str(state["memory"]),
         "last_command": state.get("last_command"),
         "last_status": state.get("last_status"),
         "ui_mode": state["ui_mode"],
@@ -699,19 +499,6 @@ def shell_status(state: dict[str, Any]) -> dict[str, Any]:
         "last_activity_at": state.get("last_activity_at"),
         "last_output_at": state.get("last_output_at"),
     }
-
-
-def validate_confirmed_command(cmd: list[str], intent: str) -> tuple[bool, str]:
-    joined = " ".join(cmd[1:]).lower()
-    forbidden = [";", "&&", "||", "|", ">", ">>", " rm ", " del ", " remove ", " mv ", " cp ", "git", "pip", "conda", "curl", "wget", "config/fixed.yaml", "release/best_config.yaml", "dataset", "benchmark", "eval.py", "scripts/run.py", "cuda_visible_devices"]
-    for item in forbidden:
-        if item in f" {joined} ":
-            return False, f"forbidden token: {item.strip()}"
-    if intent == "train_candidate" and cmd != TRAIN_COMMAND:
-        return False, "only fixed candidate training command is allowed"
-    if "config/candidate.yaml" not in joined:
-        return False, "only config/candidate.yaml is allowed"
-    return True, "ok"
 
 
 def execute_confirmed_train(state: dict[str, Any]) -> tuple[str, str]:
@@ -731,6 +518,54 @@ def execute_confirmed_train(state: dict[str, Any]) -> tuple[str, str]:
     return code, summary
 
 
+ALLOWED_TARGET_METRICS = {"pair_f1", "pair_precision", "pair_recall", "valid_structure_rate", "all_dot_ratio", "loss", "pair_count_ratio", "rankAcc", "pair_logit_gap"}
+
+
+def parse_target_spec(raw: str) -> tuple[bool, str]:
+    match = re.search(r"(pair_f1|pair_precision|pair_recall|valid_structure_rate|all_dot_ratio|loss|pair_count_ratio|rankAcc|pair_logit_gap)\s*(>=|<=|>|<|=)\s*([0-9.]+)", raw)
+    trials = re.search(r"(?:最多调参|max(?:imum)?[_ ]?trials)\s*(\d+)", raw, re.IGNORECASE)
+    if not match:
+        return False, "Unsupported target. Use: pair_f1 >= 0.75, max_trials 3."
+    metric, op, value = match.group(1), match.group(2), float(match.group(3))
+    max_trials = int(trials.group(1)) if trials else 3
+    if metric not in ALLOWED_TARGET_METRICS:
+        return False, "Unsupported target metric."
+    if not (1 <= max_trials <= 10):
+        return False, "max_trials must be between 1 and 10."
+    return True, json.dumps({"metric": metric, "operator": op, "value": value, "max_trials": max_trials})
+
+
+def write_tuning_plan(state: dict[str, Any], turn_dir: Path) -> tuple[str, str]:
+    target = state["target_tuning"]
+    if not target.get("enabled"):
+        return "FAIL", "No target is set."
+    target["current_trial"] = int(target.get("current_trial", 0)) + 1
+    trial = target["current_trial"]
+    if trial > int(target["max_trials"]):
+        return "STOP", "Maximum tuning trials reached."
+    trial_dir = state["out"] / "tuning" / f"trial_{trial:03d}"
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    source = ROOT / "config" / "candidate.yaml"
+    config_text = source.read_text(encoding="utf-8", errors="replace") if source.exists() else ""
+    (trial_dir / "config.yaml").write_text(config_text, encoding="utf-8")
+    plan = {
+        "target": target,
+        "trial": trial,
+        "config": str(trial_dir / "config.yaml"),
+        "command": f"python main.py train --config {trial_dir / 'config.yaml'} --device {state['train_device'].get('device') or 'cuda'}",
+        "dry_run": state["mode"] == "dry_run",
+        "notes": [
+            "config/candidate.yaml is not modified",
+            "no benchmark is executed",
+            "release files are not modified",
+        ],
+    }
+    write_json(trial_dir / "tuning_plan.json", plan)
+    write_markdown(trial_dir / "tuning_plan.md", ["# Tuning Plan", "", *[f"- {k}: {v}" for k, v in plan.items() if k != "notes"], "", "## Notes", *[f"- {item}" for item in plan["notes"]]])
+    target["history"].append({"trial": trial, "config": str(trial_dir / "config.yaml")})
+    return "DRY_RUN" if state["mode"] == "dry_run" else "CONFIRM_REQUIRED", str(trial_dir / "tuning_plan.md")
+
+
 def default_state(args: argparse.Namespace, out: Path, history: Path) -> dict[str, Any]:
     legacy_timeout = int(getattr(args, "timeout", 60))
     api_timeout = int(getattr(args, "api_timeout", legacy_timeout))
@@ -740,6 +575,7 @@ def default_state(args: argparse.Namespace, out: Path, history: Path) -> dict[st
     state = {
         "out": out,
         "history": history,
+        "memory": Path(getattr(args, "memory", None) or (out / "memory.jsonl")),
         "mode": "dry_run" if args.dry_run or args.no_api else "live",
         "no_api": bool(args.no_api),
         "turn": 0,
@@ -776,6 +612,22 @@ def default_state(args: argparse.Namespace, out: Path, history: Path) -> dict[st
         "confirmed_commands": [],
         "ui_mode": "normal",
         "model": args.model,
+        "train_device": {
+            "mode": None,
+            "device": None,
+            "remote": {"host": None, "port": None, "user": None, "login_command": None},
+        },
+        "target_tuning": {
+            "enabled": False,
+            "metric": None,
+            "operator": None,
+            "value": None,
+            "max_trials": 3,
+            "current_trial": 0,
+            "history": [],
+            "base_config": "config/candidate.yaml",
+            "mode": "dry_run",
+        },
     }
     state["runtime_guard"] = AgentRuntimeGuard(
         out,
@@ -790,7 +642,7 @@ def default_state(args: argparse.Namespace, out: Path, history: Path) -> dict[st
 def write_loop_stop(state: dict[str, Any], turn_dir: Path, raw_input: str, parsed_command: str | None, reason: str) -> tuple[bool, str]:
     data = {
         "stop_reason": reason,
-        "raw_input": raw_input,
+        "raw_input": sanitize_text(raw_input),
         "parsed_command": parsed_command,
         "same_raw_input_count": state.get("same_raw_input_count", 0),
         "same_failed_command_count": state.get("same_failed_command_count", 0),
@@ -858,7 +710,7 @@ def execute_input(raw: str, state: dict[str, Any], agent: RNAAnalysisAgent, echo
             "turn": turn,
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "mode": state["mode"],
-            "raw_input": raw,
+            "raw_input": sanitize_text(raw),
             "parsed_command": command,
             "args": args,
             "status": status,
@@ -873,7 +725,7 @@ def execute_input(raw: str, state: dict[str, Any], agent: RNAAnalysisAgent, echo
                 "turn": turn,
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "mode": state["mode"],
-                "raw_input": raw,
+                "raw_input": sanitize_text(raw),
                 "parsed_command": command,
                 "args": args,
                 "status": "loop_stopped",
@@ -893,6 +745,7 @@ def execute_input(raw: str, state: dict[str, Any], agent: RNAAnalysisAgent, echo
                 write_markdown(turn_dir / "blocked.md", [summary])
             state["confirmed_commands"].append({"intent": pending["intent"], "command": pending["command"], "confirmed_by_user": True})
             state["pending_confirmation"] = None
+            remember(state, "training", f"candidate training confirmation: {status_text}", {"summary": summary})
             concise_print(state, ["Confirmed training command.", "Config: config/candidate.yaml"], [f"{status_text}: {summary}"], "Inspect the run directory before any benchmark.")
             record()
             return True
@@ -928,6 +781,15 @@ def execute_input(raw: str, state: dict[str, Any], agent: RNAAnalysisAgent, echo
         command = "usage"
         make_usage(state, state["out"])
         concise_print(state, ["Write usage report."], [f"usage -> {state['out'] / 'usage.md'}"], "Switch to /dry if API usage is high.")
+        record()
+        return True
+    if slash == "/memory":
+        command = "show_memory"
+        rows = read_recent_memory(Path(state["memory"]), limit=10)
+        if rows:
+            concise_print(state, [], [f"{item.get('kind')}: {item.get('summary')}" for item in rows[-5:]], "Use inspect or target tuning to add new memory.")
+        else:
+            concise_print(state, [], ["No Agent memory yet."], "Run inspect, doctor, or set a tuning target first.")
         record()
         return True
     if slash == "/last":
@@ -1018,14 +880,19 @@ def execute_input(raw: str, state: dict[str, Any], agent: RNAAnalysisAgent, echo
                 "turn": turn,
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "mode": state["mode"],
-                "raw_input": raw,
+                "raw_input": sanitize_text(raw),
                 "parsed_command": command,
                 "args": args,
                 "status": status,
                 "out_dir": str(turn_dir),
             })
             return True
-        reason = block_reason(raw, command)
+        if command == "set_target":
+            lowered_raw = raw.lower()
+            target_blockers = ["&&", "||", ";", "|", ">>", ".env", "git", "pip ", "conda ", "curl ", "wget ", "rm ", "del ", "remove ", "mv ", "cp ", "cuda_visible_devices"]
+            reason = next((item for item in target_blockers if item in lowered_raw), None)
+        else:
+            reason = block_reason(raw, command)
         if reason:
             status = "blocked"
             message = "Blocked by Agent safety policy. This shell is read-only and cannot run training, benchmark, git, deletion, or config-modifying commands."
@@ -1064,6 +931,57 @@ def execute_input(raw: str, state: dict[str, Any], agent: RNAAnalysisAgent, echo
         elif command == "safe_compile":
             code, summary = run_subprocess_summary(SAFE_COMPILE, timeout=state["command_timeout"])
             concise_print(state, ["Compile Agent files."], [f"{code}: {summary}"], "Run agent_test next.")
+        elif command == "train_device_prompt":
+            concise_print(state, ["Select training target."], ["Where will training run? local or remote."], "Reply with local, remote, 使用 cuda, or 使用 cpu.")
+        elif command == "set_local_train":
+            state["train_device"]["mode"] = "local"
+            state["train_device"]["device"] = state["train_device"].get("device") or "cuda"
+            concise_print(state, ["Set training device."], ["Local training selected.", f"device: {state['train_device']['device']}"], "Run smoke before live training.")
+        elif command == "set_remote_train":
+            state["train_device"]["mode"] = "remote"
+            concise_print(state, ["Set remote training mode."], ["Remote training selected.", "Agent will not store or print passwords."], "Enter an ssh login command without a password.")
+        elif command == "set_remote_login":
+            login = raw.strip()
+            state["train_device"]["mode"] = "remote"
+            state["train_device"]["remote"]["login_command"] = login
+            match = re.search(r"ssh\s+-p\s+(\d+)\s+([^@]+)@(\S+)", login)
+            if match:
+                state["train_device"]["remote"].update({"port": match.group(1), "user": match.group(2), "host": match.group(3)})
+            concise_print(state, ["Record remote login template."], [f"Login command: {login}", "Password must be entered manually in the terminal."], "Run smoke on the remote server before training.")
+        elif command == "set_cuda_train":
+            state["train_device"]["device"] = "cuda"
+            concise_print(state, ["Set training device."], ["device: cuda"], "Use smoke before live training.")
+        elif command == "set_cpu_train":
+            state["train_device"]["device"] = "cpu"
+            concise_print(state, ["Set training device."], ["device: cpu"], "CPU is suitable for smoke or preflight.")
+        elif command == "show_train_device":
+            concise_print(state, [], [f"mode: {state['train_device'].get('mode')}", f"device: {state['train_device'].get('device')}", f"remote: {state['train_device'].get('remote')}"], "Set local/cuda before candidate training.")
+        elif command == "set_target":
+            ok, payload = parse_target_spec(raw)
+            if ok:
+                spec = json.loads(payload)
+                state["target_tuning"].update({"enabled": True, **spec, "current_trial": 0, "history": [], "mode": state["mode"]})
+                remember(state, "target", f"{spec['metric']} {spec['operator']} {spec['value']}", {"max_trials": spec["max_trials"]})
+                concise_print(state, ["Set tuning target."], [f"{spec['metric']} {spec['operator']} {spec['value']}", f"max_trials: {spec['max_trials']}"], "Use 开始目标训练 candidate to generate a trial plan.")
+            else:
+                status = "blocked"
+                concise_print(state, ["Validate target spec."], [payload], "Use a supported metric such as pair_f1 >= 0.75.")
+        elif command == "show_target":
+            concise_print(state, [], [json.dumps(state["target_tuning"], ensure_ascii=False)], "Start target training only after reviewing the plan.")
+        elif command == "clear_target":
+            state["target_tuning"].update({"enabled": False, "metric": None, "operator": None, "value": None, "current_trial": 0, "history": []})
+            remember(state, "target", "target tuning cleared")
+            concise_print(state, ["Clear target tuning."], ["target_tuning disabled"], "Set a new target when needed.")
+        elif command == "start_target_train":
+            code, path = write_tuning_plan(state, turn_dir)
+            remember(state, "tuning_plan", f"{code}: {path}", {"target": state["target_tuning"]})
+            concise_print(state, ["Generate target tuning plan.", "No benchmark will run."], [f"{code}: {path}"], "Review the tuning plan before any live training.")
+        elif command == "show_memory":
+            rows = read_recent_memory(Path(state["memory"]), limit=10)
+            if rows:
+                concise_print(state, [], [f"{item.get('kind')}: {item.get('summary')}" for item in rows[-5:]], "Use doctor to refresh conclusions.")
+            else:
+                concise_print(state, [], ["No Agent memory yet."], "Run inspect, doctor, or set a tuning target first.")
         elif command == "cleanup":
             keep = int(args[0]) if args else 10
             report = cleanup_reports(state["out"], keep=keep, dry_run=False)
@@ -1073,6 +991,7 @@ def execute_input(raw: str, state: dict[str, Any], agent: RNAAnalysisAgent, echo
             write_json(turn_dir / "request.json", {**data, "prompt": prompt})
             write_markdown(turn_dir / "prompt.md", [prompt])
             state["last_report_path"] = str(turn_dir / "prompt.md")
+            remember(state, "analysis", f"{command} prompt generated", {"args": args, "report": str(turn_dir / "prompt.md")})
             if state["mode"] == "live":
                 guard: AgentRuntimeGuard = state["runtime_guard"]
                 guard.mode = state["mode"]
@@ -1159,6 +1078,7 @@ def run_agent_test(args: argparse.Namespace) -> None:
         train_timeout=0,
         max_retries=2,
         max_idle_seconds=args.max_idle_seconds,
+        memory=out / "memory.jsonl",
     )
     state = default_state(ns, out, out / "history.jsonl")
     agent = RNAAnalysisAgent(dry_run=False)
@@ -1168,6 +1088,9 @@ def run_agent_test(args: argparse.Namespace) -> None:
         "\u8fd0\u884c smoke",
         "\u8fd0\u884c audit",
         "\u7f16\u8bd1 agent",
+        "\u8bbe\u7f6e\u8bad\u7ec3\u8bbe\u5907",
+        "local",
+        "\u4f7f\u7528 cuda",
         "\u68c0\u67e5 candidate",
         "\u7efc\u5408\u8bca\u65ad",
         "\u6e05\u7406\u65e7\u62a5\u544a\uff0c\u53ea\u4fdd\u755910\u6b21",
@@ -1190,6 +1113,15 @@ def run_agent_test(args: argparse.Namespace) -> None:
         "python main.py train --config config/fixed.yaml",
         "\u8bad\u7ec3 candidate && git push",
         "\u8fdb\u884c\u8bad\u7ec3 && rm -rf outputs",
+        "remote",
+        "ssh -p 14591 root@connect.westc.seetacloud.com",
+        "\u67e5\u770b\u8bad\u7ec3\u8bbe\u5907",
+        "\u8bbe\u5b9a\u76ee\u6807 pair_f1 >= 0.75\uff0c\u6700\u591a\u8c03\u53c2 3 \u6b21",
+        "\u67e5\u770b\u8c03\u53c2\u76ee\u6807",
+        "\u5f00\u59cb\u76ee\u6807\u8bad\u7ec3 candidate",
+        "\u67e5\u770b\u8bb0\u5fc6",
+        "/memory",
+        "\u6e05\u9664\u8c03\u53c2\u76ee\u6807",
         "/cleanup --keep -1",
         "/live",
         "/dry",
@@ -1315,6 +1247,7 @@ def build_parser() -> argparse.ArgumentParser:
     agent.add_argument("--dry_run", action="store_true")
     agent.add_argument("--out", default="outputs/llm_shell")
     agent.add_argument("--history", default=None)
+    agent.add_argument("--memory", default=None)
     agent.add_argument("--no_api", action="store_true")
     agent.add_argument("--model", default=None)
     agent.add_argument("--max_api_calls", type=int, default=int(os.environ.get("LLM_MAX_API_CALLS", "20")))

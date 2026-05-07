@@ -99,6 +99,7 @@ python scripts/run.py external --configs config/external_bprna_candidate.yaml co
 ```
 
 Full reproduction details are in [release/reproduce.md](release/reproduce.md).
+For training and Agent usage details, see [docs/usage.md](docs/usage.md).
 
 ## LLM Analysis Agent
 
@@ -129,11 +130,11 @@ Use `--dry_run` to inspect the exact prompt without calling the API.
 python scripts/llm.py agent --dry_run
 ```
 
-Example commands: `diagnose`, `schedule`, `report`, `auditdata`, `inspect`, `trace`, `compare`, `case`, `doctor`, `运行 smoke`, `运行 audit`, `检查 candidate`, `综合诊断`, `清理旧报告`, `/usage`, `/cleanup 10`, `/last`, `/open`, `/quiet`/`/normal`/`/verbose`, `/exit`.
+Example commands: `diagnose`, `schedule`, `report`, `auditdata`, `inspect`, `trace`, `compare`, `case`, `doctor`, `运行 smoke`, `运行 audit`, `检查 candidate`, `综合诊断`, `清理旧报告`, `/usage`, `/memory`, `/cleanup 10`, `/last`, `/open`, `/quiet`/`/normal`/`/verbose`, `/exit`.
 
 The shell is read-only and does not run training or benchmark inference. Use `--dry_run` or `--no_api` to generate prompts without API calls.
 
-Safety guards: candidate training requires explicit confirmation (`进行训练 candidate`); unsafe benchmark execution remains blocked; API calls guarded by `max_api_calls`, `max_tokens_total`, `api_timeout`, retry count, and repeated prompt guard; shell commands use `command_timeout`/`train_timeout`; loop/stall detection for repeated inputs and failed commands; `/cleanup` keeps the most recent 10 report dirs (only `outputs/llm*` locations); clean audit includes behavior-based checks for command parsing, dangerous-command blocking, and cleanup root safety. Output stays concise by default.
+Safety guards: candidate training requires explicit confirmation (`进行训练 candidate`); unsafe benchmark execution remains blocked; API calls guarded by `max_api_calls`, `max_tokens_total`, `api_timeout`, retry count, and repeated prompt guard; shell commands use `command_timeout`/`train_timeout`; loop/stall detection for repeated inputs and failed commands; `/cleanup` keeps the most recent 10 report dirs (only `outputs/llm*` locations); clean audit includes behavior-based checks for command parsing, dangerous-command blocking, and cleanup root safety. Output stays concise by default. The shell stores lightweight tuning history and conclusions in `outputs/llm_shell/memory.jsonl`, excluding passwords, API keys, labels, predictions, checkpoints, and metric rewrites.
 
 ```bash
 python scripts/llm.py agent --dry_run --api_timeout 60 --command_timeout 120 --train_timeout 0

@@ -152,6 +152,7 @@ def check_agent_shell_behavior(warnings: list[str]) -> None:
             (parse_agent_command("\u8fd0\u884c audit")[0] == "safe_audit", "parse audit"),
             (parse_agent_command("\u68c0\u67e5 candidate")[0] == "inspect", "parse inspect"),
             (parse_agent_command("\u7efc\u5408\u8bca\u65ad")[0] == "doctor", "parse doctor"),
+            (parse_agent_command("\u67e5\u770b\u8bb0\u5fc6")[0] == "show_memory", "parse memory"),
             (parse_agent_command("\u8bad\u7ec3 candidate")[0] == "train_candidate", "parse train"),
             (parse_agent_command("\u8dd1 benchmark")[0] == "benchmark_candidate", "parse benchmark"),
             (block_reason("git push origin main", "unknown") is not None, "block git push"),

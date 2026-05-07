@@ -9,7 +9,8 @@ outputs/
 *.pth
 *.ckpt
 dataset/archive/
-dataset/raw/
+dataset/raw/*
+!dataset/raw/.gitkeep
 dataset/processed_archiveii/
 dataset/processed/*.clean.jsonl
 dataset/processed/*.checked.jsonl
