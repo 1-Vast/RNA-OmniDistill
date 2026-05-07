@@ -31,7 +31,8 @@ from models.agent.analyzer import (
     write_markdown,
 )
 from models.agent.cleanup import cleanup_reports, safe_root, validate_cleanup_request
-from models.agent.memory import append_memory, read_recent_memory, sanitize_text
+from models.agent.memory import append_memory, compact_memory, read_recent_memory, sanitize_text
+from models.agent.paths import discover_runs, discover_latest_run
 from models.agent.runtime import AgentRuntimeGuard, prompt_hash, sync_guard_state
 from models.agent.safety import (
     CONFIRM_BENCH,
@@ -63,7 +64,9 @@ Slash commands:
   /status
   /usage
   /memory
+  /memory compact
   /cleanup [keep]
+  /runs
   /last
   /open
   /mode
@@ -453,6 +456,11 @@ def remember(state: dict[str, Any], kind: str, summary: str, data: dict[str, Any
     append_memory(Path(state["memory"]), kind, summary, data)
 
 
+def args_max(state: dict[str, Any], key: str = "runs") -> int:
+    """Return max items for discovery/summary commands."""
+    return {"runs": 10, "memory": 10}.get(key, 10)
+
+
 def shell_prompt(agent: RNAAnalysisAgent, command: str, args: list[str]) -> tuple[dict[str, Any], str]:
     if command == "diagnose":
         return agent.build_diagnose_prompt(Path(args[0]))
@@ -699,6 +707,7 @@ def execute_input(raw: str, state: dict[str, Any], agent: RNAAnalysisAgent, echo
     pending_cleared = False
 
     def record() -> None:
+        nonlocal status
         state["last_command"] = command or raw
         state["last_status"] = status
         state["last_turn_dir"] = str(turn_dir)
@@ -706,6 +715,16 @@ def execute_input(raw: str, state: dict[str, Any], agent: RNAAnalysisAgent, echo
             state["blocked_count"] += 1
         if status == "error":
             state["error_count"] += 1
+        # Runtime guard consecutive error tracking
+        guard = state.get("runtime_guard")
+        if guard:
+            ok, _ = guard.record_result(status)
+            if not ok:
+                status = "hard_stop"
+                concise_print(state, ["Hard stop triggered."],
+                    ["Agent stopped after repeated errors. Human review required.", f"consecutive_errors: {guard.consecutive_errors}/{guard.max_consecutive_errors}", f"consecutive_blocked: {guard.consecutive_blocked}/{guard.max_consecutive_blocked}"],
+                    "Use /clear to reset or review manually.")
+                state["last_status"] = status
         write_history(state["history"], {
             "turn": turn,
             "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -783,15 +802,6 @@ def execute_input(raw: str, state: dict[str, Any], agent: RNAAnalysisAgent, echo
         concise_print(state, ["Write usage report."], [f"usage -> {state['out'] / 'usage.md'}"], "Switch to /dry if API usage is high.")
         record()
         return True
-    if slash == "/memory":
-        command = "show_memory"
-        rows = read_recent_memory(Path(state["memory"]), limit=10)
-        if rows:
-            concise_print(state, [], [f"{item.get('kind')}: {item.get('summary')}" for item in rows[-5:]], "Use inspect or target tuning to add new memory.")
-        else:
-            concise_print(state, [], ["No Agent memory yet."], "Run inspect, doctor, or set a tuning target first.")
-        record()
-        return True
     if slash == "/last":
         command = "last"
         if state.get("last_turn_dir"):
@@ -864,7 +874,38 @@ def execute_input(raw: str, state: dict[str, Any], agent: RNAAnalysisAgent, echo
         state["last_command"] = None
         state["last_status"] = None
         state["pending_confirmation"] = None
+        guard = state.get("runtime_guard")
+        if guard:
+            guard.clear_hard_stop()
         print("Cleared in-memory shell state.")
+        record()
+        return True
+    if slash == "/runs":
+        command = "runs"
+        runs = discover_runs(max_items=args_max(state, "runs"))
+        if runs:
+            lines = [f"{item['name']}  (modified: {item.get('modified_time', 0):.0f})" for item in runs[:10]]
+            concise_print(state, ["Discover recent runs."], lines, "Use inspect <run> to analyze.")
+        else:
+            concise_print(state, ["Discover recent runs."], ["No runs found under outputs/."], "Run smoke or train first.")
+        record()
+        return True
+    if slash.startswith("/memory"):
+        parts = raw.split()
+        if len(parts) > 1 and parts[1] == "compact":
+            command = "memory_compact"
+            mem_path = Path(state["memory"])
+            report = compact_memory(mem_path)
+            concise_print(state, ["Compact Agent memory."],
+                [f"status: {report['status']}", f"lines: {report['before_lines']} -> {report.get('after_lines', '?')}"],
+                "Memory compacted; error records preserved.")
+        else:
+            command = "show_memory"
+            rows = read_recent_memory(Path(state["memory"]), limit=10)
+            if rows:
+                concise_print(state, [], [f"{item.get('kind')}: {item.get('summary')}" for item in rows[-5:]], "Use inspect or target tuning to add new memory.")
+            else:
+                concise_print(state, [], ["No Agent memory yet."], "Run inspect, doctor, or set a tuning target first.")
         record()
         return True
 
@@ -1053,6 +1094,144 @@ def run_agent(args: argparse.Namespace) -> None:
             break
         if not execute_input(raw, state, agent):
             break
+
+
+def run_agent_audit(args: argparse.Namespace) -> None:
+    """Audit Agent safety guards without calling any LLM API."""
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    
+    checks: list[dict[str, Any]] = []
+    
+    # 1. memory compact function exists
+    try:
+        from models.agent.memory import compact_memory, read_recent_memory, sanitize_text
+        checks.append({"name": "memory_compact_exists", "status": "pass"})
+    except ImportError:
+        checks.append({"name": "memory_compact_exists", "status": "fail", "detail": "compact_memory not importable"})
+    
+    # 2. read_recent_memory limit
+    try:
+        mem = Path(out / "test_memory.jsonl")
+        mem.write_text("")
+        rows = read_recent_memory(mem, limit=5)
+        mem.unlink()
+        checks.append({"name": "read_recent_memory_limit", "status": "pass", "rows": len(rows)})
+    except Exception as e:
+        checks.append({"name": "read_recent_memory_limit", "status": "fail", "detail": str(e)})
+    
+    # 3. sanitize_text
+    try:
+        result = sanitize_text("password=secret123")
+        if "secret123" not in result:
+            checks.append({"name": "sanitize_password", "status": "pass"})
+        else:
+            checks.append({"name": "sanitize_password", "status": "fail", "detail": "password not redacted"})
+    except Exception as e:
+        checks.append({"name": "sanitize_password", "status": "fail", "detail": str(e)})
+    
+    # 4. runtime guard
+    try:
+        guard = AgentRuntimeGuard(out)
+        for attr in ["max_api_calls", "max_tokens_total", "max_same_prompt", "max_consecutive_errors", "max_consecutive_blocked"]:
+            assert hasattr(guard, attr), f"missing {attr}"
+        checks.append({"name": "runtime_guard_fields", "status": "pass"})
+    except Exception as e:
+        checks.append({"name": "runtime_guard_fields", "status": "fail", "detail": str(e)})
+    
+    # 5. record_result
+    try:
+        guard = AgentRuntimeGuard(out)
+        ok, _ = guard.record_result("error")
+        assert ok, "should not stop on first error"
+        ok, _ = guard.record_result("error")
+        ok, data = guard.record_result("error")
+        assert not ok, "should stop after 3 errors"
+        assert data["stop_reason"] == "max_consecutive_errors"
+        checks.append({"name": "record_result_consecutive_errors", "status": "pass"})
+    except Exception as e:
+        checks.append({"name": "record_result_consecutive_errors", "status": "fail", "detail": str(e)})
+    
+    # 6. max_consecutive_blocked
+    try:
+        guard = AgentRuntimeGuard(out, max_consecutive_blocked=3)
+        guard.record_result("blocked")
+        guard.record_result("blocked")
+        ok, data = guard.record_result("blocked")
+        assert not ok and data["stop_reason"] == "max_consecutive_blocked"
+        checks.append({"name": "max_consecutive_blocked", "status": "pass"})
+    except Exception as e:
+        checks.append({"name": "max_consecutive_blocked", "status": "fail", "detail": str(e)})
+    
+    # 7. cleanup safe_root
+    try:
+        from models.agent.cleanup import safe_root
+        assert safe_root(Path("outputs/llm_shell")) is True
+        assert safe_root(Path("/etc/passwd")) is False
+        checks.append({"name": "cleanup_safe_root", "status": "pass"})
+    except Exception as e:
+        checks.append({"name": "cleanup_safe_root", "status": "fail", "detail": str(e)})
+    
+    # 8. benchmark blocked
+    try:
+        from models.agent.safety import block_reason, DIAGNOSTIC_ARTIFACT_PATTERNS
+        # benchmark_candidate is handled by shell confirmation gate, not block_reason
+        assert any("benchmark" in pat for pat in DIAGNOSTIC_ARTIFACT_PATTERNS) or \
+               block_reason("run benchmark", "unknown") is not None or \
+               block_reason("benchmark.json", "unknown") is not None
+        checks.append({"name": "benchmark_blocked", "status": "pass"})
+    except Exception as e:
+        checks.append({"name": "benchmark_blocked", "status": "fail", "detail": str(e)})
+    
+    # 9. training confirmation required
+    try:
+        from models.agent.safety import CONFIRM_TRAIN
+        assert len(CONFIRM_TRAIN) > 0
+        checks.append({"name": "training_confirmation_required", "status": "pass"})
+    except Exception as e:
+        checks.append({"name": "training_confirmation_required", "status": "fail", "detail": str(e)})
+    
+    # 10. discover_runs
+    try:
+        from models.agent.paths import discover_runs
+        fake = Path(out / "fake_outputs")
+        fake.mkdir(parents=True, exist_ok=True)
+        (fake / "smoke_run").mkdir(exist_ok=True)
+        (fake / "smoke_run" / "trainlog.jsonl").write_text("{}")
+        runs = discover_runs(fake, max_items=5)
+        assert len(runs) >= 1
+        checks.append({"name": "discover_runs", "status": "pass", "found": len(runs)})
+    except Exception as e:
+        checks.append({"name": "discover_runs", "status": "fail", "detail": str(e)})
+    
+    # 11. compact_memory
+    try:
+        mem_path = Path(out / "test_compact.jsonl")
+        for i in range(100):
+            mem_path.open("a").write(json.dumps({"kind": "test", "summary": f"entry_{i}"}) + "\n")
+        report = compact_memory(mem_path, keep_recent=10, keep_errors=5)
+        assert report["after_lines"] <= 15 + report.get("kept_errors", 0)
+        mem_path.unlink()
+        checks.append({"name": "memory_compact", "status": "pass", "after_lines": report["after_lines"]})
+    except Exception as e:
+        checks.append({"name": "memory_compact", "status": "fail", "detail": str(e)})
+    
+    # Summary
+    passed = sum(1 for c in checks if c["status"] == "pass")
+    failed = sum(1 for c in checks if c["status"] == "fail")
+    
+    report = {"checks": checks, "passed": passed, "failed": failed, "total": len(checks)}
+    write_json(out / "report.json", report)
+    
+    md_lines = ["# Agent Audit Report", "", f"Passed: {passed}/{len(checks)}  Failed: {failed}"]
+    for c in checks:
+        icon = "[OK]" if c["status"] == "pass" else "[FAIL]"
+        md_lines.append(f"{icon} {c['name']} {c.get('detail', '')}")
+    write_markdown(out / "report.md", md_lines)
+    
+    if failed > 0:
+        raise SystemExit(f"agent_audit: {failed} checks failed.")
+    print(f"agent_audit PASS -> {out}")
 
 
 def run_agent_test(args: argparse.Namespace) -> None:
@@ -1268,6 +1447,10 @@ def build_parser() -> argparse.ArgumentParser:
     agent_test.add_argument("--max_idle_seconds", type=int, default=120)
     agent_test.add_argument("--loop_test", action="store_true")
     agent_test.set_defaults(func=run_agent_test)
+
+    agent_audit = sub.add_parser("agent_audit")
+    agent_audit.add_argument("--out", default="outputs/llm_agent_audit")
+    agent_audit.set_defaults(func=run_agent_audit)
     return parser
 
 

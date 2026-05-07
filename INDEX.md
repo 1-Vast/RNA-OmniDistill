@@ -15,6 +15,11 @@
 - `models/token.py`: RNA tokenizer.
 - `models/pairprior.py`: optional diagnostic pair-prior probe, disabled by default.
 - `models/agent/analyzer.py`: LLM analysis agent for diagnostics, scheduling, paper reporting, and data audit.
+- `models/agent/runtime.py`: Runtime guard with API/token limits, repeated-prompt detection, and consecutive error/blocked circuit breaker.
+- `models/agent/memory.py`: Memory persistence with sanitization, file-level compact, and CORRUPT/error preservation.
+- `models/agent/paths.py`: Run discovery helper for recent experiment directories.
+- `models/agent/cleanup.py`: Safe cleanup of old report directories.
+- `models/agent/safety.py`: Command blocking, confirmation gates, safe-command whitelists.
 
 ## Scripts
 
@@ -23,9 +28,12 @@
 - `scripts/run.py`: potential, sweep, external benchmark, and ablation workflows.
 - `scripts/audit.py`: clean audit, naming audit, config integrity.
 - `scripts/probe.py`: smoke, overfit, and small sanity probes.
-- `scripts/llm.py`: CLI and concise interactive shell for the optional LLM analysis agent, including inspect, trace, compare, case, doctor, usage, memory, cleanup, API runtime guard, loop/stall guard, cleanup guard, `/last`, `/open`, and confirmation-gated candidate training controls.
+- `scripts/llm.py`: CLI and interactive shell for the optional LLM analysis agent. Supports /runs, /memory compact, agent_audit safety checks. Includes inspect, trace, compare, case, doctor, target tuning, and confirmation-gated training.
 - `scripts/download_datasets.py`: Download RNA structure datasets to `dataset/raw/`. Standard library only, no credentials.
 - `scripts/upload_datasets.py`: SFTP upload of raw datasets to remote server. Default dry-run, password prompted at terminal, never hardcoded.
+- `scripts/make_trial_config.py`: Generate temporary trial configs from base YAML without modifying originals.
+- `scripts/audit_collator.py`: Audit collator/masking statistics (task distribution, mask ratio, pair balance, length distribution).
+- `scripts/sweep_decoding.py`: Sweep decoding hyperparameters on existing checkpoints without retraining.
 
 ## Main Configs
 

@@ -18,16 +18,23 @@ class AgentRuntimeGuard:
         max_api_calls: int = 20,
         max_tokens_total: int = 20000,
         max_same_prompt: int = 2,
+        max_consecutive_errors: int = 3,
+        max_consecutive_blocked: int = 5,
         mode: str = "dry_run",
     ) -> None:
         self.out = out
         self.max_api_calls = int(max_api_calls)
         self.max_tokens_total = int(max_tokens_total)
         self.max_same_prompt = int(max_same_prompt)
+        self.max_consecutive_errors = int(max_consecutive_errors)
+        self.max_consecutive_blocked = int(max_consecutive_blocked)
         self.mode = mode
         self.api_calls = 0
         self.estimated_tokens = 0
         self.prompt_hash_counts: dict[str, int] = {}
+        self.consecutive_errors = 0
+        self.consecutive_blocked = 0
+        self.hard_stop: dict[str, Any] | None = None
 
     def estimate_tokens(self, prompt: str) -> int:
         return max(1, len(prompt) // 4)
@@ -72,6 +79,58 @@ class AgentRuntimeGuard:
         write_json(target / "limit_stop.json", data)
         write_markdown(target / "limit_stop.md", ["# Agent Limit Stop", "", *[f"- {key}: {value}" for key, value in data.items()]])
 
+    def record_result(self, status: str) -> tuple[bool, dict[str, Any]]:
+        """Record a command result and check consecutive error/blocked thresholds.
+
+        Args:
+            status: One of ok, error, blocked, loop_stopped, timeout.
+
+        Returns:
+            (should_continue, data) where should_continue is False if hard stop triggered.
+        """
+        error_statuses = {"error", "timeout", "loop_stopped"}
+
+        if status == "ok":
+            self.consecutive_errors = 0
+            self.consecutive_blocked = 0
+        elif status in error_statuses:
+            self.consecutive_errors += 1
+        elif status == "blocked":
+            self.consecutive_blocked += 1
+
+        stop_reason = None
+        if self.consecutive_errors >= self.max_consecutive_errors:
+            stop_reason = "max_consecutive_errors"
+        elif self.consecutive_blocked >= self.max_consecutive_blocked:
+            stop_reason = "max_consecutive_blocked"
+
+        data = {
+            "stop_reason": stop_reason,
+            "status": status,
+            "consecutive_errors": self.consecutive_errors,
+            "max_consecutive_errors": self.max_consecutive_errors,
+            "consecutive_blocked": self.consecutive_blocked,
+            "max_consecutive_blocked": self.max_consecutive_blocked,
+        }
+
+        if stop_reason:
+            self.hard_stop = data
+            self.write_limit_stop(self.out, {
+                "type": "hard_stop",
+                "reason": stop_reason,
+                "message": "Agent stopped after repeated errors. Human review required.",
+                "consecutive_errors": self.consecutive_errors,
+                "consecutive_blocked": self.consecutive_blocked,
+            })
+            return False, data
+        return True, data
+
+    def clear_hard_stop(self) -> None:
+        """Clear hard stop state and reset counters."""
+        self.hard_stop = None
+        self.consecutive_errors = 0
+        self.consecutive_blocked = 0
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "api_calls": self.api_calls,
@@ -79,6 +138,11 @@ class AgentRuntimeGuard:
             "estimated_tokens": self.estimated_tokens,
             "max_tokens_total": self.max_tokens_total,
             "repeated_prompt_count": max(self.prompt_hash_counts.values()) if self.prompt_hash_counts else 0,
+            "consecutive_errors": self.consecutive_errors,
+            "max_consecutive_errors": self.max_consecutive_errors,
+            "consecutive_blocked": self.consecutive_blocked,
+            "max_consecutive_blocked": self.max_consecutive_blocked,
+            "hard_stop": self.hard_stop is not None,
         }
 
 

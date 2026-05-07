@@ -70,6 +70,10 @@ release/
 
 See `python main.py overview` and `python main.py params --config config/candidate.yaml` for the framework map and tunable parameters.
 
+Agent shell is safety-hardened for long-running research workflows; see `docs/agent.md`.
+
+Sweep decoding, audit collator, and trial config tools are available; see `docs/usage.md`.
+
 Show framework:
 
 ```bash

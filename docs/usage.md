@@ -204,7 +204,7 @@ Do not upload `outputs/`, `dataset/`, `checkpoints/`, or `.env`. Passwords remai
 ## Safe Data Sync Scripts
 
 ### Download Datasets
-`scripts/download_datasets.py` downloads five classic RNA structure datasets (`ArchiveII`, `bpRNA`, `RNAStralign`, `RNAStrAND`, `Rfam`) plus recent benchmarks (`RNA3DB`, `CHANRG`, `RNASSTR`, `CRW_tRNA`). Standard library only, no passwords or API keys.
+`scripts/download_datasets.py` downloads RNA structure datasets (`ArchiveII`, `bpRNA`, `RNAStralign`, `RNAStrAND`, `Rfam`, `RNA3DB`, `CHANRG`, `RNASSTR`, `CRW_tRNA`). Standard library only, no passwords or API keys.
 
 ```bash
 # Dry-run: download to dataset/raw/
@@ -225,6 +225,18 @@ python scripts/upload_datasets.py --host connect.nmb1.seetacloud.com --port 4901
 ```
 
 Excludes `.env`, `outputs/`, `checkpoints/`, `.git/`, and other sensitive paths automatically.
+
+### Performance Tools (Safe, No Retraining)
+```bash
+# Generate a trial config (does NOT modify candidate.yaml)
+python scripts/make_trial_config.py --base config/candidate.yaml --out outputs/trials/t1/config.yaml --set decoding.pair_threshold=0.30
+
+# Audit collator/masking statistics
+python scripts/audit_collator.py --config config/candidate.yaml --split train --samples 512
+
+# Sweep decoding hyperparameters on an existing checkpoint
+python scripts/sweep_decoding.py --config config/candidate.yaml --ckpt outputs/candidate/best.pt --split val --out outputs/sweeps/t1 --device cuda --max_samples 512
+```
 
 ## Suggested Workflow
 
