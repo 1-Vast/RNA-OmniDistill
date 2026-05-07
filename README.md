@@ -123,6 +123,29 @@ python scripts/llm.py auditdata --inputs dataset/archive/train.jsonl dataset/arc
 
 Use `--dry_run` to inspect the exact prompt without calling the API.
 
+### Interactive Agent Shell
+
+```bash
+python scripts/llm.py agent --dry_run
+```
+
+Example shell session:
+
+```text
+RNA-OmniDiffusion Agent Shell
+Mode: dry-run
+Safety: read-only
+Type /help for commands, /exit to quit.
+
+agent> diagnose outputs/candidate
+agent> schedule outputs/candidate config/candidate.yaml
+agent> report release/model_card.md release/results_summary.md release/limitations.md
+agent> auditdata dataset/archive/train.jsonl dataset/archive/test.jsonl
+agent> /exit
+```
+
+The shell is read-only. It does not run training, does not run benchmark inference, and does not modify labels, predictions, metrics, checkpoints, or configs. Use `--dry_run` or `--no_api` to generate prompts without API calls.
+
 ## What Not To Claim
 
 - Do not claim LLM semantic conditioning as a positive result. It was tested and did not improve the model-level result.

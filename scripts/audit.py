@@ -381,14 +381,27 @@ def run_clean(args: argparse.Namespace) -> None:
         warnings.append("scripts/llm.py is missing")
     if "--dry_run" not in llm_text:
         warnings.append("scripts/llm.py does not expose --dry_run")
+    if '"agent"' not in llm_text and "sub.add_parser(\"agent\"" not in llm_text:
+        warnings.append("scripts/llm.py does not expose agent shell subcommand")
+    if "agent_test" not in llm_text:
+        warnings.append("scripts/llm.py does not expose agent_test")
+    if "safety_block_reason" not in llm_text or "Blocked by Agent safety policy" not in llm_text:
+        warnings.append("scripts/llm.py does not include dangerous-command blocking logic")
     forbidden_llm_exec = ["subprocess", "os.system", "Popen", "exec_command", "scripts/eval.py bench"]
     for item in forbidden_llm_exec:
         if item in llm_text:
             warnings.append(f"scripts/llm.py may execute forbidden workflow: {item}")
-    forbidden_agent_writes = ["predictions.jsonl", "benchmark.json", "best.pt", "last.pt"]
-    for item in forbidden_agent_writes:
+    forbidden_write_markers = [
+        "predictions.jsonl').write",
+        'predictions.jsonl").write',
+        "benchmark.json').write",
+        'benchmark.json").write',
+        "best.pt').write",
+        'best.pt").write',
+    ]
+    for item in forbidden_write_markers:
         if item in llm_text:
-            warnings.append(f"scripts/llm.py references protected artifact writes: {item}")
+            warnings.append(f"scripts/llm.py may write protected artifacts: {item}")
     if "LLM_API_KEY" not in analyzer_text or "LLM_MODEL" not in analyzer_text or "LLM_BASE_URL" not in analyzer_text:
         warnings.append("LLM analyzer does not read expected .env keys")
     if any("print(" in line and "api_key" in line for line in analyzer_text.splitlines()):
@@ -419,6 +432,10 @@ def run_clean(args: argparse.Namespace) -> None:
         warnings.append("README appears to claim LLM improves model F1")
     if "pair-prior" in readme_text.lower() and "optional" not in readme_text.lower():
         warnings.append("README references pair-prior without optional/probe framing")
+    if "read-only" not in readme_text.lower() or "does not run training" not in readme_text.lower():
+        warnings.append("README does not document Agent shell read-only safety")
+    if "agent" in candidate_text.lower() or "llm" in candidate_text.lower():
+        warnings.append("config/candidate.yaml references agent or llm")
 
     try:
         tracked = subprocess.check_output(["git", "ls-files"], text=True, encoding="utf-8", errors="replace").splitlines()

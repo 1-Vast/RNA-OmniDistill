@@ -158,8 +158,9 @@ def dataset_summary(path: Path, max_rows: int | None = None) -> dict[str, Any]:
 class RNAAnalysisAgent:
     """LLM-backed analysis agent that never participates in model inference."""
 
-    def __init__(self, dry_run: bool = False) -> None:
+    def __init__(self, dry_run: bool = False, model: str | None = None) -> None:
         self.dry_run = dry_run
+        self.model_override = model
 
     def call(self, user_prompt: str) -> str:
         if self.dry_run:
@@ -196,7 +197,7 @@ class RNAAnalysisAgent:
         except (KeyError, IndexError, TypeError) as exc:
             raise SystemExit("LLM response did not match OpenAI-compatible chat/completions format.") from exc
 
-    def diagnose(self, run_dir: Path) -> tuple[dict[str, Any], str]:
+    def build_diagnose_prompt(self, run_dir: Path) -> tuple[dict[str, Any], str]:
         summary = compact_run(run_dir)
         prompt = f"""Role: Failure Diagnoser.
 
@@ -216,9 +217,13 @@ Do not compare against external literature benchmarks unless supplied in the JSO
 Do not call the run unhealthy solely because it is below an external threshold.
 Use only internal comparisons visible in the JSON, such as random baseline, valid rate, pair-count ratio, gap, and rankAcc.
 """
-        return {"summary": summary, "dry_run": self.dry_run}, self.call(prompt)
+        return {"summary": summary, "dry_run": self.dry_run}, prompt
 
-    def schedule(self, run_dir: Path, config_path: Path | None = None) -> tuple[dict[str, Any], str]:
+    def diagnose(self, run_dir: Path) -> tuple[dict[str, Any], str]:
+        data, prompt = self.build_diagnose_prompt(run_dir)
+        return data, self.call(prompt)
+
+    def build_schedule_prompt(self, run_dir: Path, config_path: Path | None = None) -> tuple[dict[str, Any], str]:
         summary = compact_run(run_dir)
         config_text = read_text(config_path, max_chars=12000) if config_path else ""
         prompt = f"""Role: Experiment Scheduler.
@@ -248,9 +253,13 @@ Rules:
 
 Return a schedule table and a fail-fast checklist.
 """
-        return {"summary": summary, "config": str(config_path) if config_path else None, "dry_run": self.dry_run}, self.call(prompt)
+        return {"summary": summary, "config": str(config_path) if config_path else None, "dry_run": self.dry_run}, prompt
 
-    def report(self, inputs: list[Path], max_chars: int = 20000) -> tuple[dict[str, Any], str]:
+    def schedule(self, run_dir: Path, config_path: Path | None = None) -> tuple[dict[str, Any], str]:
+        data, prompt = self.build_schedule_prompt(run_dir, config_path)
+        return data, self.call(prompt)
+
+    def build_report_prompt(self, inputs: list[Path], max_chars: int = 20000) -> tuple[dict[str, Any], str]:
         sources = {str(path): read_text(path, max_chars=max_chars) for path in inputs}
         prompt = f"""Role: Report Generator.
 
@@ -269,9 +278,13 @@ Return:
 4. limitations paragraph
 5. reviewer-risk checklist
 """
-        return {"inputs": [str(path) for path in inputs], "dry_run": self.dry_run}, self.call(prompt)
+        return {"inputs": [str(path) for path in inputs], "dry_run": self.dry_run}, prompt
 
-    def auditdata(self, inputs: list[Path], max_rows: int | None = None) -> tuple[dict[str, Any], str]:
+    def report(self, inputs: list[Path], max_chars: int = 20000) -> tuple[dict[str, Any], str]:
+        data, prompt = self.build_report_prompt(inputs, max_chars=max_chars)
+        return data, self.call(prompt)
+
+    def build_auditdata_prompt(self, inputs: list[Path], max_rows: int | None = None) -> tuple[dict[str, Any], str]:
         summaries = [dataset_summary(path, max_rows=max_rows) for path in inputs]
         prompt = f"""Role: Data Quality Auditor.
 
@@ -287,13 +300,17 @@ Return:
 4. what extra checks should be run before paper submission
 5. concise action list
 """
-        return {"summaries": summaries, "dry_run": self.dry_run}, self.call(prompt)
+        return {"summaries": summaries, "dry_run": self.dry_run}, prompt
+
+    def auditdata(self, inputs: list[Path], max_rows: int | None = None) -> tuple[dict[str, Any], str]:
+        data, prompt = self.build_auditdata_prompt(inputs, max_rows=max_rows)
+        return data, self.call(prompt)
 
     def _settings(self) -> dict[str, Any]:
         env = load_env()
         api_key = env.get("LLM_API_KEY") or env.get("OPENAI_API_KEY")
         base_url = env.get("LLM_BASE_URL") or env.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
-        model = env.get("LLM_MODEL") or env.get("OPENAI_MODEL") or "gpt-4.1-mini"
+        model = self.model_override or env.get("LLM_MODEL") or env.get("OPENAI_MODEL") or "gpt-4.1-mini"
         temperature = float(env.get("LLM_TEMPERATURE", "0.1"))
         max_tokens = int(env.get("LLM_MAX_TOKENS", "1200"))
         if not api_key or api_key == "YOUR_KEY":
