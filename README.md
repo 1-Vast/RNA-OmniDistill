@@ -129,68 +129,17 @@ Use `--dry_run` to inspect the exact prompt without calling the API.
 python scripts/llm.py agent --dry_run
 ```
 
-Example shell session:
+Example commands: `diagnose`, `schedule`, `report`, `auditdata`, `inspect`, `trace`, `compare`, `case`, `doctor`, `运行 smoke`, `运行 audit`, `检查 candidate`, `综合诊断`, `清理旧报告`, `/usage`, `/cleanup 10`, `/last`, `/open`, `/quiet`/`/normal`/`/verbose`, `/exit`.
 
-```text
-RNA-OmniDiffusion Agent Shell
-Mode: dry-run
-Safety: read-only
-Type /help for commands, /exit to quit.
+The shell is read-only and does not run training or benchmark inference. Use `--dry_run` or `--no_api` to generate prompts without API calls.
 
-agent> diagnose outputs/candidate
-agent> schedule outputs/candidate config/candidate.yaml
-agent> report release/model_card.md release/results_summary.md release/limitations.md
-agent> auditdata dataset/archive/train.jsonl dataset/archive/test.jsonl
-agent> 运行 smoke
-agent> 运行 audit
-agent> 检查 candidate
-agent> 综合诊断
-agent> 清理旧报告，只保留10次
-agent> /usage
-agent> /cleanup 10
-agent> /quiet
-agent> /normal
-agent> /exit
-```
-
-The shell is read-only by default. It does not run training, does not run benchmark inference, and does not modify labels, predictions, metrics, checkpoints, or configs. Use `--dry_run` or `--no_api` to generate prompts without API calls.
-
-Interactive Agent Shell with Safety Guards:
-
-- Agent can execute only safe whitelisted commands by default: smoke, clean audit, Agent `py_compile`, read-only diagnostics, cleanup, usage, and `git status --short`.
-- Training and benchmark execution are blocked by default.
-- Candidate training requires explicit confirmation: after `agent> 训练 candidate`, reply exactly `进行训练`. In dry-run mode this only prints the planned command.
-- Unsafe benchmark execution remains blocked unless a documented safe dry-run benchmark exists.
-- API calls are limited by `max_api_calls`, `max_tokens_total`, `api_timeout`, retry count, and repeated prompt guard.
-- Shell commands use a separate `command_timeout`; confirmation-gated training uses `train_timeout`, where `0` means no shell-imposed training timeout.
-- The shell has loop / stalled detection for repeated inputs, repeated failed commands, repeated prompt hashes, and safe-command timeouts.
-- `/cleanup` keeps the most recent 10 report directories by default, normalizes unsafe `keep < 1` values back to 10, and only cleans safe `outputs/llm*` locations, including explicit `outputs/llm_server_*` roots.
-- `/last` and `/open` print the latest turn/report path without opening files or calling the API.
-- API calls are guarded in both shell and standalone CLI modes.
-- Clean audit includes behavior-based checks for command parsing, dangerous-command blocking, and cleanup root safety.
-- The interface is concise by default. Use `/quiet`, `/normal`, or `/verbose` to change shell output detail.
-- The Agent gives a short, concrete recommendation after each command.
-
-Example with explicit guards:
+Safety guards: candidate training requires explicit confirmation (`进行训练 candidate`); benchmark execution remains blocked; API calls guarded by `max_api_calls`, `max_tokens_total`, `api_timeout`, retry count, and repeated prompt guard; shell commands use `command_timeout`/`train_timeout`; loop/stall detection for repeated inputs and failed commands; `/cleanup` keeps the most recent 10 report dirs (only `outputs/llm*` locations); clean audit includes behavior-based checks for command parsing, dangerous-command blocking, and cleanup root safety.
 
 ```bash
 python scripts/llm.py agent --dry_run --api_timeout 60 --command_timeout 120 --train_timeout 0
 ```
 
-```text
-agent> 运行 smoke
-agent> 检查 candidate
-agent> 综合诊断
-agent> 训练 candidate
-agent> 进行训练 candidate
-agent> /usage
-agent> /last
-agent> /open
-agent> /cleanup 10
-agent> /exit
-```
-
-Training and inference diagnostics:
+Diagnostics (inspect existing artifacts only):
 
 ```text
 agent> inspect outputs/candidate
@@ -199,8 +148,6 @@ agent> compare outputs/candidate outputs/oldbase
 agent> case outputs/candidate/predictions.jsonl
 agent> doctor outputs/candidate config/candidate.yaml
 ```
-
-These commands inspect existing artifacts only. They help identify training instability, benchmark provenance mismatch, pair-count issues, and sample-level failure modes.
 
 ## What Not To Claim
 

@@ -29,7 +29,6 @@ from models.agent.analyzer import (
     trace_provenance,
     write_json,
     write_markdown,
-    write_report,
 )
 
 
@@ -105,6 +104,19 @@ def require_dir(path: Path) -> Path:
     if not path.exists() or not path.is_dir():
         raise SystemExit(f"Input directory not found: {path}")
     return path
+
+
+def make_agent(args: argparse.Namespace, dry_run: bool | None = None) -> RNAAnalysisAgent:
+    return RNAAnalysisAgent(
+        dry_run=dry_run if dry_run is not None else args.dry_run,
+        model=getattr(args, "model", None),
+        timeout=getattr(args, "api_timeout", getattr(args, "timeout", 60)),
+        max_retries=getattr(args, "max_retries", 2),
+    )
+
+
+def tail_lines(text: str, n: int = 20) -> str:
+    return "\n".join(text.splitlines()[-n:])
 
 
 def write_rule_outputs(
@@ -219,14 +231,14 @@ class AgentRuntimeGuard:
 
 def run_diagnose(args: argparse.Namespace) -> None:
     out = Path(args.out)
-    agent = RNAAnalysisAgent(dry_run=args.dry_run, model=getattr(args, "model", None), timeout=getattr(args, "api_timeout", getattr(args, "timeout", 60)), max_retries=getattr(args, "max_retries", 2))
+    agent = make_agent(args)
     data, prompt = agent.build_diagnose_prompt(require_dir(Path(args.run)))
     write_rule_outputs(out, "diagnose", data, ["# Diagnose Prompt", "", prompt], data, prompt, args.dry_run, agent, standalone_guard(args, out, args.dry_run))
 
 
 def run_schedule(args: argparse.Namespace) -> None:
     out = Path(args.out)
-    agent = RNAAnalysisAgent(dry_run=args.dry_run, model=getattr(args, "model", None), timeout=getattr(args, "api_timeout", getattr(args, "timeout", 60)), max_retries=getattr(args, "max_retries", 2))
+    agent = make_agent(args)
     config = require_file(Path(args.config)) if args.config else None
     data, prompt = agent.build_schedule_prompt(require_dir(Path(args.run)), config)
     write_rule_outputs(out, "schedule", data, ["# Schedule Prompt", "", prompt], data, prompt, args.dry_run, agent, standalone_guard(args, out, args.dry_run))
@@ -234,20 +246,20 @@ def run_schedule(args: argparse.Namespace) -> None:
 
 def run_report(args: argparse.Namespace) -> None:
     out = Path(args.out)
-    agent = RNAAnalysisAgent(dry_run=args.dry_run, model=getattr(args, "model", None), timeout=getattr(args, "api_timeout", getattr(args, "timeout", 60)), max_retries=getattr(args, "max_retries", 2))
+    agent = make_agent(args)
     data, prompt = agent.build_report_prompt([require_file(Path(path)) for path in args.inputs], max_chars=args.max_chars)
     write_rule_outputs(out, "report", data, ["# Report Prompt", "", prompt], data, prompt, args.dry_run, agent, standalone_guard(args, out, args.dry_run))
 
 
 def run_auditdata(args: argparse.Namespace) -> None:
     out = Path(args.out)
-    agent = RNAAnalysisAgent(dry_run=args.dry_run, model=getattr(args, "model", None), timeout=getattr(args, "api_timeout", getattr(args, "timeout", 60)), max_retries=getattr(args, "max_retries", 2))
+    agent = make_agent(args)
     data, prompt = agent.build_auditdata_prompt([require_file(Path(path)) for path in args.inputs], max_rows=args.max_rows)
     write_rule_outputs(out, "dataaudit", data, ["# Data Audit Prompt", "", prompt], data, prompt, args.dry_run, agent, standalone_guard(args, out, args.dry_run))
 
 
 def run_inspect(args: argparse.Namespace) -> None:
-    agent = RNAAnalysisAgent(dry_run=args.dry_run, model=getattr(args, "model", None), timeout=getattr(args, "api_timeout", getattr(args, "timeout", 60)), max_retries=getattr(args, "max_retries", 2))
+    agent = make_agent(args)
     result = inspect_run_artifacts(Path(args.run))
     data, prompt = agent.build_inspect_prompt(result)
     out = Path(args.out)
@@ -255,7 +267,7 @@ def run_inspect(args: argparse.Namespace) -> None:
 
 
 def run_trace(args: argparse.Namespace) -> None:
-    agent = RNAAnalysisAgent(dry_run=args.dry_run, model=getattr(args, "model", None), timeout=getattr(args, "api_timeout", getattr(args, "timeout", 60)), max_retries=getattr(args, "max_retries", 2))
+    agent = make_agent(args)
     result = trace_provenance(Path(args.config), Path(args.ckpt), Path(args.benchmark))
     data, prompt = agent.build_trace_prompt(result)
     out = Path(args.out)
@@ -263,7 +275,7 @@ def run_trace(args: argparse.Namespace) -> None:
 
 
 def run_compare(args: argparse.Namespace) -> None:
-    agent = RNAAnalysisAgent(dry_run=args.dry_run, model=getattr(args, "model", None), timeout=getattr(args, "api_timeout", getattr(args, "timeout", 60)), max_retries=getattr(args, "max_retries", 2))
+    agent = make_agent(args)
     result = compare_runs(Path(args.a), Path(args.b))
     data, prompt = agent.build_compare_prompt(result)
     out = Path(args.out)
@@ -271,7 +283,7 @@ def run_compare(args: argparse.Namespace) -> None:
 
 
 def run_case(args: argparse.Namespace) -> None:
-    agent = RNAAnalysisAgent(dry_run=args.dry_run, model=getattr(args, "model", None), timeout=getattr(args, "api_timeout", getattr(args, "timeout", 60)), max_retries=getattr(args, "max_retries", 2))
+    agent = make_agent(args)
     result = case_analysis(Path(args.pred), top_bad=args.top_bad, top_good=args.top_good)
     out = Path(args.out)
     data, prompt = agent.build_case_prompt(result)
@@ -305,7 +317,7 @@ def doctor_result(run_dir: Path, config: Path) -> dict[str, Any]:
 
 
 def run_doctor(args: argparse.Namespace) -> None:
-    agent = RNAAnalysisAgent(dry_run=args.dry_run, model=getattr(args, "model", None), timeout=getattr(args, "api_timeout", getattr(args, "timeout", 60)), max_retries=getattr(args, "max_retries", 2))
+    agent = make_agent(args)
     out = Path(args.out)
     result = doctor_result(Path(args.run), Path(args.config))
     write_json(out / "inspect" / "inspect.json", result["inspect"])
@@ -526,23 +538,22 @@ def parse_agent_command(raw: str) -> tuple[str, list[str], str | None]:
     return "unknown", [], prefix_mode
 
 
+DANGEROUS_ALWAYS = ["git push", "git commit", "git reset", "git checkout", "git clean", "&&", "||", ";", "|", " rm ", " del ", "remove ", " mv ", " cp ", ".env", "api_key", "llm_api_key", "cuda_visible_devices", "pip install", "conda install", "curl ", "wget ", "config/fixed.yaml", "release/best_config.yaml"]
+DANGEROUS_WRITE = ["rm ", "del ", "remove ", "mv ", "cp ", "overwrite", "\u4fee\u6539\u914d\u7f6e", "\u5220\u9664", "\u8986\u76d6", ".env", "api_key", "llm_api_key", "cuda_visible_devices", "pip install", "conda install", "curl ", "wget "]
+DIAGNOSTIC_ARTIFACT_PATTERNS = ["benchmark.json", "predictions.jsonl", "best.pt", "checkpoint"]
+DIAGNOSTIC_COMMANDS = {"trace", "case", "doctor", "inspect", "compare", "diagnose", "report"}
+
+
 def block_reason(raw: str, command: str) -> str | None:
     lower = raw.lower()
-    dangerous_for_any = ["git push", "git commit", "git reset", "git checkout", "git clean", "&&", "||", ";", "|", " rm ", " del ", "remove ", " mv ", " cp ", ".env", "api_key", "llm_api_key", "cuda_visible_devices", "pip install", "conda install", "curl ", "wget ", "config/fixed.yaml", "release/best_config.yaml"]
-    for item in dangerous_for_any:
+    for item in DANGEROUS_ALWAYS:
         if item in f" {lower} ":
             return item
     if command in {"train_candidate", "benchmark_candidate"}:
         return None
-    blocked = [
-        "git push", "git commit", "git reset", "git checkout", "git clean",
-        "rm ", "del ", "remove ", "mv ", "cp ", "overwrite",
-        "\u4fee\u6539\u914d\u7f6e", "\u5220\u9664", "\u8986\u76d6",
-        ".env", "api_key", "llm_api_key", "cuda_visible_devices",
-        "pip install", "conda install", "curl ", "wget ",
-    ]
-    if command not in {"trace", "case", "doctor", "inspect", "compare", "diagnose", "report"}:
-        blocked.extend(["benchmark.json", "predictions.jsonl", "best.pt", "checkpoint"])
+    blocked = list(DANGEROUS_WRITE)
+    if command not in DIAGNOSTIC_COMMANDS:
+        blocked.extend(DIAGNOSTIC_ARTIFACT_PATTERNS)
     for item in blocked:
         if item in lower:
             return item
@@ -563,15 +574,15 @@ def run_subprocess_summary(cmd: list[str], timeout: int | None) -> tuple[str, st
         )
     except subprocess.TimeoutExpired as exc:
         output = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
-        return "TIMEOUT", "\n".join((output.splitlines() + ["Training command timed out."])[-20:])
+        return "TIMEOUT", tail_lines(output + "\nTraining command timed out.")
     output = proc.stdout or ""
     if proc.returncode != 0:
-        return "FAIL", "\n".join(output.splitlines()[-20:])
+        return "FAIL", tail_lines(output)
     if "smoke_ok" in output:
         return "PASS", "smoke_ok"
     if "clean PASS" in output:
         return "PASS", "clean PASS"
-    return "PASS", "\n".join(output.splitlines()[-5:])
+    return "PASS", tail_lines(output, n=5)
 
 
 def concise_print(state: dict[str, Any], plan: list[str], result: list[str], suggestion: str, extra: list[str] | None = None) -> None:

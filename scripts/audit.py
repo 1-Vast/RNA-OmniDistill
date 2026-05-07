@@ -115,6 +115,126 @@ KEEP_FILES = [
 ]
 
 
+AGENT_SHELL_MARKERS = [
+    ("--dry_run", "scripts/llm.py does not expose --dry_run"),
+    ('"agent"', "scripts/llm.py does not expose agent shell subcommand"),
+    ("agent_test", "scripts/llm.py does not expose agent_test"),
+    ("inspect", "scripts/llm.py does not support inspect"),
+    ("trace", "scripts/llm.py does not support trace"),
+    ("compare", "scripts/llm.py does not support compare"),
+    ("case", "scripts/llm.py does not support case"),
+    ("doctor", "scripts/llm.py does not support doctor"),
+    ("cleanup", "scripts/llm.py does not support cleanup"),
+    ("usage", "scripts/llm.py does not support usage"),
+    ("max_api_calls", "scripts/llm.py missing API guard marker: max_api_calls"),
+    ("max_tokens_total", "scripts/llm.py missing API guard marker: max_tokens_total"),
+    ("timeout", "scripts/llm.py missing API guard marker: timeout"),
+    ("max_turns", "scripts/llm.py missing API guard marker: max_turns"),
+    ("max_same_prompt", "scripts/llm.py missing API guard marker: max_same_prompt"),
+    ("safe_root", "scripts/llm.py missing cleanup guard marker: safe_root"),
+    ("keep", "scripts/llm.py missing cleanup guard marker: keep"),
+    ("dataset", "scripts/llm.py missing cleanup guard marker: dataset"),
+    ("config", "scripts/llm.py missing cleanup guard marker: config"),
+    ("models", "scripts/llm.py missing cleanup guard marker: models"),
+    ("scripts", "scripts/llm.py missing cleanup guard marker: scripts"),
+    ("release", "scripts/llm.py missing cleanup guard marker: release"),
+    ("CONFIRM_TRAIN", "scripts/llm.py missing shell safety marker: CONFIRM_TRAIN"),
+    ("pending_confirmation", "scripts/llm.py missing shell safety marker: pending_confirmation"),
+    ("confirmed_train_candidate", "scripts/llm.py missing shell safety marker: confirmed_train_candidate"),
+    ("benchmark_candidate", "scripts/llm.py missing shell safety marker: benchmark_candidate"),
+    ("git push", "scripts/llm.py missing shell safety marker: git push"),
+    (".env", "scripts/llm.py missing shell safety marker: .env"),
+    ("/quiet", "scripts/llm.py missing shell safety marker: /quiet"),
+    ("/verbose", "scripts/llm.py missing shell safety marker: /verbose"),
+    ("concise_print", "scripts/llm.py missing shell safety marker: concise_print"),
+    ("block_reason", "scripts/llm.py does not include dangerous-command blocking logic"),
+    ("Blocked by Agent safety policy", "scripts/llm.py does not include dangerous-command blocking logic"),
+    ("scripts/eval.py bench --config config/candidate.yaml", "scripts/llm.py does not keep benchmark execution blocked"),
+    ("No safe benchmark command was found", "scripts/llm.py does not keep benchmark execution blocked"),
+]
+
+
+def check_agent_shell_behavior(warnings: list[str]) -> None:
+    try:
+        from scripts.llm import block_reason, cleanup_reports, parse_agent_command, safe_root
+
+        behavior_checks = [
+            (parse_agent_command("\u8fd0\u884c smoke")[0] == "safe_smoke", "parse smoke"),
+            (parse_agent_command("\u8fd0\u884c audit")[0] == "safe_audit", "parse audit"),
+            (parse_agent_command("\u68c0\u67e5 candidate")[0] == "inspect", "parse inspect"),
+            (parse_agent_command("\u7efc\u5408\u8bca\u65ad")[0] == "doctor", "parse doctor"),
+            (parse_agent_command("\u8bad\u7ec3 candidate")[0] == "train_candidate", "parse train"),
+            (parse_agent_command("\u8dd1 benchmark")[0] == "benchmark_candidate", "parse benchmark"),
+            (block_reason("git push origin main", "unknown") is not None, "block git push"),
+            (block_reason("pip install x", "unknown") is not None, "block pip"),
+            (block_reason("conda install x", "unknown") is not None, "block conda"),
+            (block_reason("curl http://example.com", "unknown") is not None, "block curl"),
+            (block_reason("wget http://example.com", "unknown") is not None, "block wget"),
+            (block_reason("rm -rf outputs", "unknown") is not None, "block rm"),
+            (block_reason("CUDA_VISIBLE_DEVICES=0 python main.py train", "unknown") is not None, "block cuda env"),
+            (block_reason("report .env", "report") is not None, "block env read"),
+            (safe_root(Path("outputs/llm_shell")) is True, "safe root llm_shell"),
+            (safe_root(Path("outputs/llm")) is True, "safe root llm"),
+            (safe_root(Path("outputs/llm_test")) is True, "safe root llm_test"),
+            (safe_root(Path("outputs/llm_shell_test")) is True, "safe root llm_shell_test"),
+            (safe_root(Path("outputs/llm_server_test")) is True, "safe root llm_server"),
+            (safe_root(Path("models")) is False, "block root models"),
+            (safe_root(Path("config")) is False, "block root config"),
+            (safe_root(Path("dataset")) is False, "block root dataset"),
+            (safe_root(Path("release")) is False, "block root release"),
+            (safe_root(Path(".git")) is False, "block root git"),
+        ]
+        failed = [name for ok, name in behavior_checks if not ok]
+        normalized = cleanup_reports(Path("outputs/llm_shell_test"), keep=-1, dry_run=True)
+        if normalized.get("normalized_keep") != 10:
+            failed.append("cleanup keep normalization")
+        if cleanup_reports(Path("models"), keep=10, dry_run=True).get("status") != "blocked":
+            failed.append("cleanup blocks models")
+        if failed:
+            warnings.append("Agent behavior checks failed: " + ", ".join(failed))
+    except Exception as exc:
+        warnings.append(f"Agent behavior checks failed to run: {exc}")
+
+
+def check_agent_docs(readme_text: str, llm_script: Path, llm_text: str, analyzer_text: str, candidate_text: str, warnings: list[str]) -> None:
+    readme_lower = readme_text.lower()
+    if "LLM improves F1" in readme_text or "LLM improves Pair F1" in readme_text:
+        warnings.append("README appears to claim LLM improves model F1")
+    if "pair-prior" in readme_lower and "optional" not in readme_lower:
+        warnings.append("README references pair-prior without optional/probe framing")
+    if "read-only" not in readme_lower or "does not run training" not in readme_lower:
+        warnings.append("README does not document Agent shell read-only safety")
+    for cmd_name in ["inspect outputs/candidate", "trace config/candidate.yaml", "compare outputs/candidate", "case outputs/candidate", "doctor outputs/candidate"]:
+        if cmd_name not in readme_text:
+            warnings.append(f"README does not document Agent diagnostic command: {cmd_name}")
+    for phrase in ["candidate training requires explicit confirmation", "unsafe benchmark", "max_api_calls", "max_tokens_total", "timeout", "repeated prompt", "keeps the most recent 10", "concise"]:
+        if phrase not in readme_lower:
+            warnings.append(f"README does not document Agent shell guard: {phrase}")
+    if "agent" in candidate_text.lower() or "llm" in candidate_text.lower():
+        warnings.append("config/candidate.yaml references agent or llm")
+    if "LLM_API_KEY" not in analyzer_text or "LLM_MODEL" not in analyzer_text or "LLM_BASE_URL" not in analyzer_text:
+        warnings.append("LLM analyzer does not read expected .env keys")
+    if any("print(" in line and "api_key" in line for line in analyzer_text.splitlines()):
+        warnings.append("LLM analyzer may print API key")
+
+    forbidden_llm_exec = ["os.system", "Popen", "exec_command"]
+    for item in forbidden_llm_exec:
+        if item in llm_text:
+            warnings.append(f"scripts/llm.py may execute forbidden workflow: {item}")
+    forbidden_write = ["predictions.jsonl').write", 'predictions.jsonl").write', "benchmark.json').write", 'benchmark.json").write', "best.pt').write", 'best.pt").write']
+    for item in forbidden_write:
+        if item in llm_text:
+            warnings.append(f"scripts/llm.py may write protected artifacts: {item}")
+
+    if not llm_script.exists():
+        warnings.append("scripts/llm.py is missing")
+    for marker, msg in AGENT_SHELL_MARKERS:
+        if marker not in llm_text:
+            warnings.append(msg)
+    if not all(command in llm_text for command in ["\\u68c0\\u67e5 candidate", "\\u7efc\\u5408\\u8bca\\u65ad", "\\u8fd0\\u884c smoke", "\\u8fd0\\u884c audit", "\\u8fdb\\u884c\\u8bad\\u7ec3"]):
+        warnings.append("agent_test does not cover required chat-style commands")
+
+
 def ensure_archive_paths(config: dict) -> None:
     data = config["data"]
     if Path(data["train_jsonl"]).exists():
@@ -377,51 +497,6 @@ def run_clean(args: argparse.Namespace) -> None:
     analyzer = Path("models/agent/analyzer.py")
     llm_text = llm_script.read_text(encoding="utf-8", errors="replace") if llm_script.exists() else ""
     analyzer_text = analyzer.read_text(encoding="utf-8", errors="replace") if analyzer.exists() else ""
-    if not llm_script.exists():
-        warnings.append("scripts/llm.py is missing")
-    if "--dry_run" not in llm_text:
-        warnings.append("scripts/llm.py does not expose --dry_run")
-    if '"agent"' not in llm_text and "sub.add_parser(\"agent\"" not in llm_text:
-        warnings.append("scripts/llm.py does not expose agent shell subcommand")
-    if "agent_test" not in llm_text:
-        warnings.append("scripts/llm.py does not expose agent_test")
-    for command in ["inspect", "trace", "compare", "case", "doctor", "cleanup", "usage"]:
-        if command not in llm_text:
-            warnings.append(f"scripts/llm.py does not support {command}")
-    for marker in ["max_api_calls", "max_tokens_total", "timeout", "max_turns", "max_same_prompt"]:
-        if marker not in llm_text:
-            warnings.append(f"scripts/llm.py missing API guard marker: {marker}")
-    for marker in ["safe_root", "keep", "outputs/llm_shell_test", "dataset", "config", "models", "scripts", "release", "docs", ".git"]:
-        if marker not in llm_text:
-            warnings.append(f"scripts/llm.py missing cleanup guard marker: {marker}")
-    for marker in ["CONFIRM_TRAIN", "pending_confirmation", "confirmed_train_candidate", "benchmark_candidate", "git push", ".env", "/quiet", "/verbose", "concise_print"]:
-        if marker not in llm_text:
-            warnings.append(f"scripts/llm.py missing shell safety/UI marker: {marker}")
-    if not all(command in llm_text for command in ["\\u68c0\\u67e5 candidate", "\\u7efc\\u5408\\u8bca\\u65ad", "\\u8fd0\\u884c smoke", "\\u8fd0\\u884c audit", "\\u8fdb\\u884c\\u8bad\\u7ec3"]):
-        warnings.append("agent_test does not cover required chat-style commands")
-    if "block_reason" not in llm_text or "Blocked by Agent safety policy" not in llm_text:
-        warnings.append("scripts/llm.py does not include dangerous-command blocking logic")
-    forbidden_llm_exec = ["os.system", "Popen", "exec_command"]
-    for item in forbidden_llm_exec:
-        if item in llm_text:
-            warnings.append(f"scripts/llm.py may execute forbidden workflow: {item}")
-    if "scripts/eval.py bench --config config/candidate.yaml" not in llm_text or "No safe benchmark command was found" not in llm_text:
-        warnings.append("scripts/llm.py does not keep benchmark execution blocked")
-    forbidden_write_markers = [
-        "predictions.jsonl').write",
-        'predictions.jsonl").write',
-        "benchmark.json').write",
-        'benchmark.json").write',
-        "best.pt').write",
-        'best.pt").write',
-    ]
-    for item in forbidden_write_markers:
-        if item in llm_text:
-            warnings.append(f"scripts/llm.py may write protected artifacts: {item}")
-    if "LLM_API_KEY" not in analyzer_text or "LLM_MODEL" not in analyzer_text or "LLM_BASE_URL" not in analyzer_text:
-        warnings.append("LLM analyzer does not read expected .env keys")
-    if any("print(" in line and "api_key" in line for line in analyzer_text.splitlines()):
-        warnings.append("LLM analyzer may print API key")
 
     def config_text(path: str) -> str:
         p = Path(path)
@@ -444,70 +519,8 @@ def run_clean(args: argparse.Namespace) -> None:
             warnings.append(f"{name} references pair-prior; candidate path should keep it disabled")
 
     readme_text = Path("README.md").read_text(encoding="utf-8", errors="replace") if Path("README.md").exists() else ""
-    if "LLM improves F1" in readme_text or "LLM improves Pair F1" in readme_text:
-        warnings.append("README appears to claim LLM improves model F1")
-    if "pair-prior" in readme_text.lower() and "optional" not in readme_text.lower():
-        warnings.append("README references pair-prior without optional/probe framing")
-    readme_lower = readme_text.lower()
-    if "read-only" not in readme_lower or "does not run training" not in readme_lower:
-        warnings.append("README does not document Agent shell read-only safety")
-    for command in ["inspect outputs/candidate", "trace config/candidate.yaml", "compare outputs/candidate", "case outputs/candidate", "doctor outputs/candidate"]:
-        if command not in readme_text:
-            warnings.append(f"README does not document Agent diagnostic command: {command}")
-    for phrase in [
-        "candidate training requires explicit confirmation",
-        "unsafe benchmark",
-        "max_api_calls",
-        "max_tokens_total",
-        "timeout",
-        "repeated prompt",
-        "keeps the most recent 10",
-        "concise",
-    ]:
-        if phrase not in readme_lower:
-            warnings.append(f"README does not document Agent shell guard: {phrase}")
-    if "agent" in candidate_text.lower() or "llm" in candidate_text.lower():
-        warnings.append("config/candidate.yaml references agent or llm")
-
-    try:
-        from scripts.llm import block_reason, cleanup_reports, parse_agent_command, safe_root
-
-        behavior_checks = [
-            (parse_agent_command("运行 smoke")[0] == "safe_smoke", "parse smoke"),
-            (parse_agent_command("运行 audit")[0] == "safe_audit", "parse audit"),
-            (parse_agent_command("检查 candidate")[0] == "inspect", "parse inspect"),
-            (parse_agent_command("综合诊断")[0] == "doctor", "parse doctor"),
-            (parse_agent_command("训练 candidate")[0] == "train_candidate", "parse train"),
-            (parse_agent_command("跑 benchmark")[0] == "benchmark_candidate", "parse benchmark"),
-            (block_reason("git push origin main", "unknown") is not None, "block git push"),
-            (block_reason("pip install x", "unknown") is not None, "block pip"),
-            (block_reason("conda install x", "unknown") is not None, "block conda"),
-            (block_reason("curl http://example.com", "unknown") is not None, "block curl"),
-            (block_reason("wget http://example.com", "unknown") is not None, "block wget"),
-            (block_reason("rm -rf outputs", "unknown") is not None, "block rm"),
-            (block_reason("CUDA_VISIBLE_DEVICES=0 python main.py train", "unknown") is not None, "block cuda env"),
-            (block_reason("report .env", "report") is not None, "block env read"),
-            (safe_root(Path("outputs/llm_shell")) is True, "safe root llm_shell"),
-            (safe_root(Path("outputs/llm")) is True, "safe root llm"),
-            (safe_root(Path("outputs/llm_test")) is True, "safe root llm_test"),
-            (safe_root(Path("outputs/llm_shell_test")) is True, "safe root llm_shell_test"),
-            (safe_root(Path("outputs/llm_server_test")) is True, "safe root llm_server"),
-            (safe_root(Path("models")) is False, "block root models"),
-            (safe_root(Path("config")) is False, "block root config"),
-            (safe_root(Path("dataset")) is False, "block root dataset"),
-            (safe_root(Path("release")) is False, "block root release"),
-            (safe_root(Path(".git")) is False, "block root git"),
-        ]
-        failed_behavior = [name for ok, name in behavior_checks if not ok]
-        normalized = cleanup_reports(Path("outputs/llm_shell_test"), keep=-1, dry_run=True)
-        if normalized.get("normalized_keep") != 10:
-            failed_behavior.append("cleanup keep normalization")
-        if cleanup_reports(Path("models"), keep=10, dry_run=True).get("status") != "blocked":
-            failed_behavior.append("cleanup blocks models")
-        if failed_behavior:
-            warnings.append("Agent behavior checks failed: " + ", ".join(failed_behavior))
-    except Exception as exc:
-        warnings.append(f"Agent behavior checks failed to run: {exc}")
+    check_agent_docs(readme_text, llm_script, llm_text, analyzer_text, candidate_text, warnings)
+    check_agent_shell_behavior(warnings)
 
     try:
         tracked = subprocess.check_output(["git", "ls-files"], text=True, encoding="utf-8", errors="replace").splitlines()
