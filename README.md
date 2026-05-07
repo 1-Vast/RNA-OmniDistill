@@ -68,6 +68,8 @@ release/
 
 ## Reproduce
 
+See `python main.py overview` and `python main.py params --config config/candidate.yaml` for the framework map and tunable parameters.
+
 Show framework:
 
 ```bash

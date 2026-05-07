@@ -6,7 +6,7 @@
 
 ## Core Code
 
-- `main.py`: Clean CLI entry point for train, eval, infer, smoke, params, overview, and agent commands.
+- `main.py`: Research-style CLI entry window with overview, mode registry, tunable parameter registry, and lazy training/inference dispatch.
 - `models/omni.py`: Transformer encoder, token heads, pair head, pair refinement, token/pair/conflict loss plumbing.
 - `models/decode.py`: strict Nussinov decoding, greedy probe, staged decode utilities.
 - `models/mask.py`: random, pair-aware, and motif-span masking helpers.
