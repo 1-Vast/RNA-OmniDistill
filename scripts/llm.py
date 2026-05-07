@@ -31,6 +31,7 @@ from models.agent.analyzer import (
     write_markdown,
 )
 from models.agent.cleanup import cleanup_reports, safe_root, validate_cleanup_request
+from models.agent.env import detect_runtime_env, env_summary
 from models.agent.memory import append_memory, compact_memory, read_recent_memory, sanitize_text
 from models.agent.paths import discover_runs, discover_latest_run
 from models.agent.runtime import AgentRuntimeGuard, prompt_hash, sync_guard_state
@@ -46,7 +47,50 @@ from models.agent.safety import (
 )
 
 
-HELP_TEXT = """Built-in commands:
+EXAMPLES_TEXT = """Try:
+  运行 smoke
+  检查 candidate
+  查找实验
+  查看记忆
+  压缩记忆
+  设置训练设备为远程
+  设定目标 pair_f1 >= 0.75, 最多调参 3 次
+  扫描解码参数
+  审计 collator
+  查看远程登录命令
+  查看运行环境"""
+
+
+def agent_welcome(state: dict[str, Any]) -> str:
+    """Return a concise welcome banner."""
+    ui = state.get("ui_mode", "normal")
+    if ui == "quiet":
+        return "RNA-OmniDiffusion Agent | dry-run | read-only"
+    env = env_summary()
+    mode = state["mode"]
+    lines = [
+        f"RNA-OmniDiffusion Agent",
+        f"mode: {mode} | safety: read-only | {env}",
+        "",
+        "You can type natural language:",
+        "  运行 smoke",
+        "  检查 candidate",
+        "  查找实验",
+        "  设置训练设备为远程",
+        "  设定目标 pair_f1 >= 0.75, 最多调参 3 次",
+        "",
+        "/help for commands, /examples for more, /exit to quit.",
+        "",
+    ]
+    if ui == "verbose":
+        lines.insert(2, f"out: {state['out']}")
+        lines.insert(3, f"history: {state['history']}")
+        lines.insert(4, f"memory: {state['memory']}")
+    return "\n".join(lines)
+
+
+HELP_TEXT = """\
+Built-in commands:
   diagnose <run_dir>
   inspect <run_dir>
   trace <config_path> <ckpt_path> <benchmark_json>
@@ -61,6 +105,7 @@ HELP_TEXT = """Built-in commands:
 
 Slash commands:
   /help
+  /examples
   /status
   /usage
   /memory
@@ -367,6 +412,15 @@ INTENT_RULES = [
     IntentRule("start_target_train", ("开始目标训练",)),
     IntentRule("benchmark_candidate", ("benchmark", "跑 benchmark")),
     IntentRule("train_candidate", ("train", "训练")),
+    IntentRule("show_env", ("查看运行环境", "当前在哪", "本地还是服务器", "环境检测")),
+    IntentRule("show_remote_login", ("查看远程登录命令", "远程登录")),
+    IntentRule("server_train_plan", ("服务器训练", "服务器 smoke")),
+    IntentRule("local_dataset_check", ("查看本地数据集", "检查数据集", "检查本地数据集")),
+    IntentRule("remote_dataset_check", ("查看服务器数据集", "服务器数据集")),
+    IntentRule("compare_datasets", ("对比本地和服务器数据集", "对比数据集")),
+    IntentRule("sweep_decoding_plan", ("扫描解码参数", "sweep 解码", "解码扫描", "sweep decoding")),
+    IntentRule("audit_collator_plan", ("审计 collator", "检查 mask 分布", "检查 collator", "collator 审计")),
+    IntentRule("trial_config_plan", ("生成临时配置", "生成 trial config", "临时配置")),
 ]
 
 
@@ -791,6 +845,11 @@ def execute_input(raw: str, state: dict[str, Any], agent: RNAAnalysisAgent, echo
             print(HELP_TEXT)
         record()
         return True
+    if slash == "/examples":
+        command = "examples"
+        print(EXAMPLES_TEXT)
+        record()
+        return True
     if slash == "/status":
         command = "status"
         print(json.dumps(shell_status(state), indent=2, ensure_ascii=False))
@@ -1027,6 +1086,68 @@ def execute_input(raw: str, state: dict[str, Any], agent: RNAAnalysisAgent, echo
             keep = int(args[0]) if args else 10
             report = cleanup_reports(state["out"], keep=keep, dry_run=False)
             concise_print(state, [f"Cleanup reports under {state['out']}."], [f"{report['status']}: removed {len(report['removed_dirs'])}"], "Run /usage to verify state.")
+        elif command == "show_env":
+            env = detect_runtime_env()
+            loc = "remote (Linux server)" if env["is_remote_guess"] else "local"
+            lines = [f"platform: {env['platform']}", f"cwd: {env['cwd']}", f"runtime: {loc}"]
+            if env["torch_available"]:
+                lines.append(f"cuda: {'available' if env['has_cuda'] else 'not available'}")
+            hint = "Use remote server for full training." if not env["is_remote_guess"] else "You appear to be on the remote server."
+            concise_print(state, ["Detect runtime environment."], lines, hint)
+        elif command == "show_remote_login":
+            lines = ["ssh -p 49018 root@connect.nmb1.seetacloud.com", "Password: enter manually in terminal."]
+            concise_print(state, ["Show remote login template."], lines, "Never save the password in code, docs, .env, or Agent memory.")
+        elif command == "server_train_plan":
+            lines = [
+                "SSH to server: ssh -p 49018 root@connect.nmb1.seetacloud.com",
+                "Then run:",
+                "  cd /root/RNA-OmniDiffusion",
+                "  git pull origin main",
+                "  python main.py smoke",
+                "  python main.py train --config config/candidate.yaml --device cuda",
+                "Password: enter manually in terminal.",
+            ]
+            concise_print(state, ["Server training workflow."], lines, "Local shell remains dry-run. Password is never saved.")
+        elif command == "local_dataset_check":
+            concise_print(state, ["Dataset check plan."], [
+                "Run: python scripts/check_datasets.py check --root dataset/raw --out outputs/dataset_check/local",
+                "This only reads file metadata, not content.",
+            ], "Run on server too with --root /root/RNA-OmniDiffusion/dataset/raw")
+        elif command == "remote_dataset_check":
+            lines = [
+                "On the remote server, run:",
+                "  cd /root/RNA-OmniDiffusion",
+                "  python scripts/check_datasets.py check --root dataset/raw --out outputs/dataset_check/remote",
+                "Then scp the report back and compare locally.",
+            ]
+            concise_print(state, ["Remote dataset check plan."], lines, "Do not copy password. Use scp manually from local terminal.")
+        elif command == "compare_datasets":
+            lines = [
+                "# Step 1: local",
+                "python scripts/check_datasets.py check --root dataset/raw --out outputs/dataset_check/local",
+                "# Step 2: on remote server",
+                "python scripts/check_datasets.py check --root /root/RNA-OmniDiffusion/dataset/raw --out outputs/dataset_check/remote",
+                "# Step 3: scp remote report back, then compare",
+                "python scripts/check_datasets.py compare --local-report outputs/dataset_check/local/dataset_check.json --remote-report outputs/dataset_check/remote/dataset_check.json --out outputs/dataset_check/compare",
+            ]
+            concise_print(state, ["Dataset comparison plan."], lines, "Generate reports on both sides first, then compare.")
+        elif command == "sweep_decoding_plan":
+            lines = [
+                "python scripts/sweep_decoding.py --config config/candidate.yaml --ckpt outputs/candidate/best.pt --split val --out outputs/sweeps/decoding_candidate --device cuda --max_samples 512",
+                "Best run on server with GPU.",
+            ]
+            concise_print(state, ["Decoding sweep plan."], lines, "Use --dry-run first to preview combinations.")
+        elif command == "audit_collator_plan":
+            lines = [
+                "python scripts/audit_collator.py --config config/candidate.yaml --split train --samples 512 --out outputs/audit/collator_candidate",
+            ]
+            concise_print(state, ["Collator audit plan."], lines, "Check task distribution and masking stats before tuning.")
+        elif command == "trial_config_plan":
+            lines = [
+                "python scripts/make_trial_config.py --base config/candidate.yaml --out outputs/trials/my_trial --set decoding.pair_threshold=0.30",
+                "Does NOT modify config/candidate.yaml.",
+            ]
+            concise_print(state, ["Trial config plan."], lines, "Use --set to override whitelisted keys only.")
         elif command in {"diagnose", "inspect", "trace", "compare", "case", "doctor", "schedule", "report", "auditdata"}:
             data, prompt = shell_prompt(agent, command, args)
             write_json(turn_dir / "request.json", {**data, "prompt": prompt})
@@ -1082,10 +1203,7 @@ def run_agent(args: argparse.Namespace) -> None:
     out.mkdir(parents=True, exist_ok=True)
     state = default_state(args, out, history)
     agent = RNAAnalysisAgent(dry_run=False, model=args.model, timeout=state["api_timeout"], max_retries=args.max_retries)
-    print("RNA-OmniDiffusion Agent Shell")
-    print(f"Mode: {'dry-run' if state['mode'] == 'dry_run' else 'live'}")
-    print("Safety: read-only")
-    print("Type /help for commands, /exit to quit.")
+    print(agent_welcome(state))
     while True:
         try:
             raw = input("agent> ")

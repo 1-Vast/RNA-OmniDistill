@@ -72,6 +72,8 @@ See `python main.py overview` and `python main.py params --config config/candida
 
 Agent shell is safety-hardened for long-running research workflows; see `docs/agent.md`.
 
+For interactive use, run `python agent.py` or see `docs/agent_guide.md`.
+
 Sweep decoding, audit collator, and trial config tools are available; see `docs/usage.md`.
 
 Show framework:

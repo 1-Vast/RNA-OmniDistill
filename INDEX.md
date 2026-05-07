@@ -14,9 +14,13 @@
 - `models/collator.py`: task sampling, masking, segment ids, pair labels.
 - `models/token.py`: RNA tokenizer.
 - `models/pairprior.py`: optional diagnostic pair-prior probe, disabled by default.
+- `agent.py`: Thin root-level launcher for the Agent shell. Run `python agent.py` to start.
+- `agent.cmd`: Windows CMD launcher. Run `agent` in cmd.exe.
+- `agent`: Unix shell launcher. Run `bash agent` on Linux/macOS.
 - `models/agent/analyzer.py`: LLM analysis agent for diagnostics, scheduling, paper reporting, and data audit.
 - `models/agent/runtime.py`: Runtime guard with API/token limits, repeated-prompt detection, and consecutive error/blocked circuit breaker.
 - `models/agent/memory.py`: Memory persistence with sanitization, file-level compact, and CORRUPT/error preservation.
+- `models/agent/env.py`: Runtime environment detection (platform, hostname, CUDA, local/remote guess).
 - `models/agent/paths.py`: Run discovery helper for recent experiment directories.
 - `models/agent/cleanup.py`: Safe cleanup of old report directories.
 - `models/agent/safety.py`: Command blocking, confirmation gates, safe-command whitelists.
@@ -34,6 +38,13 @@
 - `scripts/make_trial_config.py`: Generate temporary trial configs from base YAML without modifying originals.
 - `scripts/audit_collator.py`: Audit collator/masking statistics (task distribution, mask ratio, pair balance, length distribution).
 - `scripts/sweep_decoding.py`: Sweep decoding hyperparameters on existing checkpoints without retraining.
+- `scripts/check_datasets.py`: Dataset metadata checker (local scan + report comparison).
+
+## Docs
+
+- `docs/usage.md`: direct CLI training, Agent-assisted training, local/remote device setup, Agent memory, and target tuning plan guide.
+- `docs/agent.md`: Agent safety architecture reference.
+- `docs/agent_guide.md`: Comprehensive Agent usage guide with natural language examples and remote workflow.
 
 ## Main Configs
 
