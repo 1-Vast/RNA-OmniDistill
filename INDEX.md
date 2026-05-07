@@ -23,7 +23,7 @@
 - `scripts/run.py`: potential, sweep, external benchmark, and ablation workflows.
 - `scripts/audit.py`: clean audit, naming audit, config integrity.
 - `scripts/probe.py`: smoke, overfit, and small sanity probes.
-- `scripts/llm.py`: CLI and concise interactive shell for the optional LLM analysis agent, including inspect, trace, compare, case, doctor, usage, cleanup, API guard, and confirmation-gated candidate training controls.
+- `scripts/llm.py`: CLI and concise interactive shell for the optional LLM analysis agent, including inspect, trace, compare, case, doctor, usage, cleanup, API runtime guard, loop/stall guard, cleanup guard, `/last`, `/open`, and confirmation-gated candidate training controls.
 
 ## Main Configs
 

@@ -470,6 +470,46 @@ def run_clean(args: argparse.Namespace) -> None:
         warnings.append("config/candidate.yaml references agent or llm")
 
     try:
+        from scripts.llm import block_reason, cleanup_reports, parse_agent_command, safe_root
+
+        behavior_checks = [
+            (parse_agent_command("运行 smoke")[0] == "safe_smoke", "parse smoke"),
+            (parse_agent_command("运行 audit")[0] == "safe_audit", "parse audit"),
+            (parse_agent_command("检查 candidate")[0] == "inspect", "parse inspect"),
+            (parse_agent_command("综合诊断")[0] == "doctor", "parse doctor"),
+            (parse_agent_command("训练 candidate")[0] == "train_candidate", "parse train"),
+            (parse_agent_command("跑 benchmark")[0] == "benchmark_candidate", "parse benchmark"),
+            (block_reason("git push origin main", "unknown") is not None, "block git push"),
+            (block_reason("pip install x", "unknown") is not None, "block pip"),
+            (block_reason("conda install x", "unknown") is not None, "block conda"),
+            (block_reason("curl http://example.com", "unknown") is not None, "block curl"),
+            (block_reason("wget http://example.com", "unknown") is not None, "block wget"),
+            (block_reason("rm -rf outputs", "unknown") is not None, "block rm"),
+            (block_reason("CUDA_VISIBLE_DEVICES=0 python main.py train", "unknown") is not None, "block cuda env"),
+            (block_reason("report .env", "report") is not None, "block env read"),
+            (safe_root(Path("outputs/llm_shell")) is True, "safe root llm_shell"),
+            (safe_root(Path("outputs/llm")) is True, "safe root llm"),
+            (safe_root(Path("outputs/llm_test")) is True, "safe root llm_test"),
+            (safe_root(Path("outputs/llm_shell_test")) is True, "safe root llm_shell_test"),
+            (safe_root(Path("outputs/llm_server_test")) is True, "safe root llm_server"),
+            (safe_root(Path("models")) is False, "block root models"),
+            (safe_root(Path("config")) is False, "block root config"),
+            (safe_root(Path("dataset")) is False, "block root dataset"),
+            (safe_root(Path("release")) is False, "block root release"),
+            (safe_root(Path(".git")) is False, "block root git"),
+        ]
+        failed_behavior = [name for ok, name in behavior_checks if not ok]
+        normalized = cleanup_reports(Path("outputs/llm_shell_test"), keep=-1, dry_run=True)
+        if normalized.get("normalized_keep") != 10:
+            failed_behavior.append("cleanup keep normalization")
+        if cleanup_reports(Path("models"), keep=10, dry_run=True).get("status") != "blocked":
+            failed_behavior.append("cleanup blocks models")
+        if failed_behavior:
+            warnings.append("Agent behavior checks failed: " + ", ".join(failed_behavior))
+    except Exception as exc:
+        warnings.append(f"Agent behavior checks failed to run: {exc}")
+
+    try:
         tracked = subprocess.check_output(["git", "ls-files"], text=True, encoding="utf-8", errors="replace").splitlines()
     except Exception:
         tracked = []

@@ -623,8 +623,12 @@ class RNAAnalysisAgent:
         self.max_retries = int(max_retries)
 
     def call(self, user_prompt: str) -> str:
+        text, _usage = self.call_with_usage(user_prompt)
+        return text
+
+    def call_with_usage(self, user_prompt: str) -> tuple[str, dict[str, Any]]:
         if self.dry_run:
-            return "# Dry Run Prompt\n\n" + user_prompt
+            return "# Dry Run Prompt\n\n" + user_prompt, {}
         settings = self._settings()
         payload = {
             "model": settings["model"],
@@ -658,7 +662,8 @@ class RNAAnalysisAgent:
         else:
             raise SystemExit(last_error or "LLM request failed.")
         try:
-            return data["choices"][0]["message"]["content"].strip()
+            usage = data.get("usage", {}) if isinstance(data, dict) else {}
+            return data["choices"][0]["message"]["content"].strip(), usage if isinstance(usage, dict) else {}
         except (KeyError, IndexError, TypeError) as exc:
             raise SystemExit("LLM response did not match OpenAI-compatible chat/completions format.") from exc
 

@@ -161,10 +161,34 @@ Interactive Agent Shell with Safety Guards:
 - Training and benchmark execution are blocked by default.
 - Candidate training requires explicit confirmation: after `agent> 训练 candidate`, reply exactly `进行训练`. In dry-run mode this only prints the planned command.
 - Unsafe benchmark execution remains blocked unless a documented safe dry-run benchmark exists.
-- API calls are limited by `max_api_calls`, `max_tokens_total`, `timeout`, retry count, and repeated prompt guard.
-- `/cleanup` keeps the most recent 10 report directories by default and only cleans safe `outputs/llm*` locations.
+- API calls are limited by `max_api_calls`, `max_tokens_total`, `api_timeout`, retry count, and repeated prompt guard.
+- Shell commands use a separate `command_timeout`; confirmation-gated training uses `train_timeout`, where `0` means no shell-imposed training timeout.
+- The shell has loop / stalled detection for repeated inputs, repeated failed commands, repeated prompt hashes, and safe-command timeouts.
+- `/cleanup` keeps the most recent 10 report directories by default, normalizes unsafe `keep < 1` values back to 10, and only cleans safe `outputs/llm*` locations, including explicit `outputs/llm_server_*` roots.
+- `/last` and `/open` print the latest turn/report path without opening files or calling the API.
+- API calls are guarded in both shell and standalone CLI modes.
+- Clean audit includes behavior-based checks for command parsing, dangerous-command blocking, and cleanup root safety.
 - The interface is concise by default. Use `/quiet`, `/normal`, or `/verbose` to change shell output detail.
 - The Agent gives a short, concrete recommendation after each command.
+
+Example with explicit guards:
+
+```bash
+python scripts/llm.py agent --dry_run --api_timeout 60 --command_timeout 120 --train_timeout 0
+```
+
+```text
+agent> 运行 smoke
+agent> 检查 candidate
+agent> 综合诊断
+agent> 训练 candidate
+agent> 进行训练 candidate
+agent> /usage
+agent> /last
+agent> /open
+agent> /cleanup 10
+agent> /exit
+```
 
 Training and inference diagnostics:
 
