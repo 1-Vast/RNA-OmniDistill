@@ -514,11 +514,11 @@ def run_clean(args: argparse.Namespace) -> None:
         return p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
 
     candidate_text = config_text("config/candidate.yaml")
-    fixed_text = config_text("config/fixed.yaml")
+    rnafm_text = config_text("config/candidate_from_rnafm_pretrain.yaml")
     best_text = config_text("release/best_config.yaml")
     for name, text in [
         ("config/candidate.yaml", candidate_text),
-        ("config/fixed.yaml", fixed_text),
+        ("config/candidate_from_rnafm_pretrain.yaml", rnafm_text),
         ("release/best_config.yaml", best_text),
     ]:
         lowered = text.lower()
@@ -565,7 +565,7 @@ def run_clean(args: argparse.Namespace) -> None:
         "agent_files": sorted(str(path) for path in Path("agent").rglob("*.py")) if Path("agent").exists() else [],
         "tracked_blocked_files": tracked_blocked,
         "warnings": warnings,
-        "recommended_next_command": "conda run -n DL python scripts\\run.py ablate --config config/fixed.yaml --only full nopair nonuss random --device cuda --decode nussinov --bench_workers 8 --bench_profile --bench_resume",
+        "recommended_next_command": "conda run -n DL python scripts\\run.py ablate --config config/candidate.yaml --only full nopair nonuss random --device cuda --decode nussinov --bench_workers 8 --bench_profile --bench_resume",
     }
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     lines = [
@@ -602,13 +602,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Audit RNA-OmniDiffusion runs.")
     sub = parser.add_subparsers(dest="cmd", required=True)
     align = sub.add_parser("align")
-    align.add_argument("--config", default="config/fixed.yaml")
+    align.add_argument("--config", default="config/candidate.yaml")
     align.add_argument("--batches", type=int, default=1)
     align.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     align.add_argument("--out", default="outputs/align")
     align.set_defaults(func=run_align)
     profile = sub.add_parser("profile")
-    profile.add_argument("--config", default="config/fixed.yaml")
+    profile.add_argument("--config", default="config/candidate.yaml")
     profile.add_argument("--steps", type=int, default=2)
     profile.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     profile.add_argument("--out", default="outputs/profile")

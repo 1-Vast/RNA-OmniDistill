@@ -346,7 +346,7 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser = subparsers.add_parser(
         "eval", help="Evaluate validation split from a checkpoint"
     )
-    eval_parser.add_argument("--config", default="config/base.yaml", help="YAML evaluation config")
+    eval_parser.add_argument("--config", default="config/candidate.yaml", help="YAML evaluation config")
     eval_parser.add_argument("--ckpt", required=True, help="Checkpoint path")
     eval_parser.add_argument(
         "--device",
@@ -357,7 +357,7 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.set_defaults(func=_run_eval)
 
     infer = subparsers.add_parser("infer", help="Run single-sample inference")
-    infer.add_argument("--config", default="config/base.yaml", help="YAML inference config")
+    infer.add_argument("--config", default="config/candidate.yaml", help="YAML inference config")
     infer.add_argument("--ckpt", required=True, help="Checkpoint path")
     infer.add_argument(
         "--task",

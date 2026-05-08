@@ -90,7 +90,7 @@ python main.py eval --config config/candidate.yaml --ckpt outputs/candidate/best
 ```
 
 Options:
-- `--config`: Evaluation config (default: `config/base.yaml`)
+- `--config`: Evaluation config (default: `config/candidate.yaml`)
 - `--ckpt`: Checkpoint path (required)
 - `--device`: `auto`, `cuda`, or `cpu`
 
@@ -117,7 +117,7 @@ python main.py infer \
 ```
 
 Options:
-- `--config`: Inference config (default: `config/base.yaml`)
+- `--config`: Inference config (default: `config/candidate.yaml`)
 - `--ckpt`: Checkpoint path (required)
 - `--task`: `seq2struct` or `invfold` (required)
 - `--seq`: RNA sequence (required for seq2struct)

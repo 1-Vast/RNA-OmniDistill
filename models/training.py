@@ -390,7 +390,7 @@ def load_checkpoint(ckpt_path: str | Path, device: torch.device) -> tuple[Dict[s
     path = Path(ckpt_path)
     if not path.exists():
         raise FileNotFoundError(
-            f"Checkpoint not found: {path}. Run `python main.py train --config config/fixed.yaml` first, "
+            f"Checkpoint not found: {path}. Run `python main.py train --config config/candidate.yaml` first, "
             "or pass an existing --ckpt path."
         )
     try:
@@ -1014,7 +1014,7 @@ def run_infer(args: argparse.Namespace) -> None:
 
 
 def run_smoke(args: argparse.Namespace) -> None:
-    config = load_config("config/base.yaml")
+    config = load_config("config/candidate.yaml")
     config = deep_update(
         config,
         {

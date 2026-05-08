@@ -19,15 +19,9 @@ model:
   num_heads: 8
   dropout: 0.1
   max_position_embeddings: 2048
-  pairhead: mlp
-  pairhidden: 512
-  pairdrop: 0.1
-  distbias: false
-  pairrefine: false
   use_distill_head: true
   teacher_dim: 640
   distill_pool: mean
-  invalidlogit: -20.0
 
 training:
   batch_size: 64
@@ -39,8 +33,6 @@ training:
   lambda_struct: 0.0
   lambda_pair: 0.0
   lambda_distill: 0.05
-  pair_negative_ratio: 0
-  pair_positive_weight: 1.0
   grad_clip: 1.0
   amp: true
   seed: 42

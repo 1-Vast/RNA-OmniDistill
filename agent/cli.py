@@ -1405,7 +1405,7 @@ def run_agent_test(args: argparse.Namespace) -> None:
         "report .env",
         "report README.md > .env",
         "\u8fd0\u884c smoke >> outputs/log.txt",
-        "python main.py train --config config/fixed.yaml",
+            "python main.py train --config config/candidate.yaml",
         "\u8bad\u7ec3 candidate && git push",
         "\u8fdb\u884c\u8bad\u7ec3 && rm -rf outputs",
         "remote",

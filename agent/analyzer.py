@@ -717,7 +717,7 @@ Rules:
   - python scripts/eval.py bench --config <config> --ckpt <ckpt> --split test --device cuda --decode nussinov --stage_logits --workers 8 --chunksize 2 --profile
   - python scripts/eval.py bench --config <config> --ckpt <ckpt> --split test --device cuda --decode nussinov --decode_only --workers 8 --chunksize 2 --profile --scan config/scan.json
   - python scripts/run.py external --configs <configs> --dataset <name> --split random --device cuda --decode nussinov --bench_workers 8 --tag <tag>
-- Existing configs you may reference as executable commands: config/candidate.yaml, config/candidate_norefine.yaml, config/candidate_oldmask.yaml, config/oldbase.yaml, config/fixed.yaml, config/scan.json.
+- Existing configs you may reference as executable commands: config/candidate.yaml, config/seq_pretrain_rnafm.yaml, config/candidate_from_rnafm_pretrain.yaml, config/cpu.yaml, config/scan.json.
 - If a new config is needed, write "manual config patch required" and give a YAML patch. Do not put nonexistent config paths such as config/exp1.yaml in runnable commands.
 - Prefer 3 to 6 experiments with commands and stop criteria.
 

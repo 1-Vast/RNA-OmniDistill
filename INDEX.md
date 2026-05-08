@@ -51,13 +51,12 @@
 
 ## Main Configs
 
-- `config/candidate.yaml`: current candidate model.
-- `config/fixed.yaml`: alias-style candidate configuration used by prior runs.
-- `config/oldbase.yaml`: historical baseline.
-- `config/candidate_norefine.yaml`: no pair-refinement control.
-- `config/candidate_oldmask.yaml`: old masking control.
-- `config/precision*.yaml`: rejected precision-oriented probes; useful only for diagnostics.
-- `config/archive_failed/`: failed or diagnostic configurations.
+- `config/candidate.yaml`: canonical supervised ArchiveII candidate.
+- `config/seq_pretrain_rnafm.yaml`: sequence-only RNA-FM teacher distillation pretraining.
+- `config/candidate_from_rnafm_pretrain.yaml`: supervised fine-tune initialized from the distilled student encoder.
+- `config/cpu.yaml`: compact CPU preflight config.
+- `config/ablate/*.yaml`: small ablation patches applied on top of the canonical candidate config.
+- `config/scan.json`: decoding scan settings.
 
 ## Release Artifacts
 

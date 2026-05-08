@@ -16,6 +16,7 @@ dataset/unlabeled/
 dataset/teacher_emb/
 dataset/raw/*
 !dataset/raw/.gitkeep
+dataset/Rfam/
 dataset/processed_archiveii/
 dataset/processed/*.clean.jsonl
 dataset/processed/*.checked.jsonl

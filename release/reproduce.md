@@ -78,7 +78,7 @@ This reuses staged logits and scans decoding parameters without retraining.
 
 ```bash
 python scripts/run.py external \
-  --configs config/external_bprna_candidate.yaml config/external_bprna_norefine.yaml config/external_bprna_oldbase.yaml \
+--configs config/candidate.yaml \
   --dataset bprna \
   --split random \
   --device cuda \
@@ -97,9 +97,7 @@ Valid rate = 1.0
 ## Component Controls
 
 ```bash
-python main.py train --config config/candidate_norefine.yaml --device cuda
-python main.py train --config config/candidate_oldmask.yaml --device cuda
-python main.py train --config config/oldbase.yaml --device cuda
+python scripts/run.py ablate --config config/candidate.yaml --only full nopair nonuss random --device cuda
 ```
 
 Use strict Nussinov benchmark for all final comparisons.

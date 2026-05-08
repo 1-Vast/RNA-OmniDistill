@@ -194,14 +194,14 @@ def build_full_summary(
         decision = "Decision: Run core ablation next."
         recommended_config = None
     elif severe_over_pairing:
-        decision = "Decision: Severe over-pairing. Do not run ablation. Try config/strict.yaml."
-        recommended_config = "config/strict.yaml"
+        decision = "Decision: Severe over-pairing. Do not run ablation. Create a trial from config/candidate.yaml with stricter decoding or loss settings."
+        recommended_config = "config/candidate.yaml"
     elif over_pairing:
-        decision = "Decision: Mild over-pairing. Do not run ablation yet. Try config/mild.yaml."
-        recommended_config = "config/mild.yaml"
+        decision = "Decision: Mild over-pairing. Do not run ablation yet. Create a trial from config/candidate.yaml with lower pair threshold pressure."
+        recommended_config = "config/candidate.yaml"
     elif ranking_failure:
-        decision = "Decision: Pair head ranking is unstable. Do not tune decoding. Try config/stable.yaml or inspect pair labels."
-        recommended_config = "config/stable.yaml"
+        decision = "Decision: Pair head ranking is unstable. Do not tune decoding. Inspect pair labels before creating a trial from config/candidate.yaml."
+        recommended_config = "config/candidate.yaml"
     elif all_dot_collapse:
         decision = "Decision: All-dot risk. Do not run ablation. Inspect structure loss and decoding."
         recommended_config = None
@@ -313,7 +313,7 @@ def write_full_report(summary: dict, out: Path) -> None:
             "Next command:",
             "",
             "```powershell",
-            "conda run -n DL python scripts\\run.py ablate --config config/fixed.yaml --only full nopair nonuss random --device cuda",
+            "conda run -n DL python scripts\\run.py ablate --config config/candidate.yaml --only full nopair nonuss random --device cuda",
             "```",
         ]
     if summary.get("recommended_config"):
@@ -630,9 +630,9 @@ def write_ablate_decision(rows: list[dict], root: Path) -> None:
         f"Final recommendation: {'can enter the paper ablation table with fallback caveats' if paper_ready else 'do not use directly as a strict paper table without another diagnostic pass'}",
     ]
     if over == "mild over-pairing":
-        lines.append("Recommended next config if retuning is needed: `config/mild.yaml`.")
+        lines.append("Recommended next step if retuning is needed: create a trial config from `config/candidate.yaml`.")
     elif over == "severe over-pairing":
-        lines.append("Recommended next config if retuning is needed: `config/strict.yaml`.")
+        lines.append("Recommended next step if retuning is needed: create a trial config from `config/candidate.yaml`.")
     elif not fallback_valid:
         lines.append("Recommended next config is not a training config; inspect token fallback validity first.")
     (root / "decision.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -755,7 +755,7 @@ def run_sweep(args: argparse.Namespace) -> None:
 
 
 def run_potential(args: argparse.Namespace) -> None:
-    source_config = Path(args.config) if args.config else Path("config/fixed.yaml" if args.set == "archive" else f"config/{args.set}.yaml")
+    source_config = Path(args.config) if args.config else Path("config/candidate.yaml" if args.set == "archive" else f"config/{args.set}.yaml")
     if not source_config.exists():
         raise SystemExit(f"Config does not exist: {source_config}")
     require_data(source_config)
@@ -972,7 +972,7 @@ def main() -> None:
     potential.add_argument("--scan")
     potential.set_defaults(func=run_potential)
     ablate = sub.add_parser("ablate")
-    ablate.add_argument("--config", default="config/fixed.yaml")
+    ablate.add_argument("--config", default="config/candidate.yaml")
     ablate.add_argument("--only", nargs="*")
     ablate.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     ablate.add_argument("--decode", choices=["nussinov", "greedy"], default="nussinov")
@@ -1043,11 +1043,7 @@ def run_foundation(args):
 
     if "external" in directions:
         print("\n=== EXTERNAL ===")
-        configs = [
-            "config/external_bprna_candidate.yaml",
-            "config/external_bprna_norefine.yaml", 
-            "config/external_bprna_oldbase.yaml",
-        ]
+        configs = ["config/candidate.yaml"]
         for cfg in configs:
             name = cfg.split("/")[-1].replace(".yaml","")
             max_steps = "8" if quick else "2000"
@@ -1055,7 +1051,7 @@ def run_foundation(args):
             print(f"  Training {name} (max_steps={max_steps})...")
             subprocess.run([sys.executable, "main.py", "train", "--config", cfg, "--device", device, "--max_steps", max_steps] + (["--train_subset", train_subset] if train_subset != "0" else []), cwd=str(Path(__file__).resolve().parents[1]), check=False)
             print(f"  Benchmarking {name}...")
-            subprocess.run([sys.executable, "scripts/eval.py", "bench", "--config", cfg, "--ckpt", f"outputs/external_bprna_{name.replace('external_bprna_','')}/best.pt", "--split", "test", "--device", device, "--decode", "nussinov", "--limit", "32" if quick else "0"], cwd=str(Path(__file__).resolve().parents[1]), check=False)
+            subprocess.run([sys.executable, "scripts/eval.py", "bench", "--config", cfg, "--ckpt", f"outputs/{name}/best.pt", "--split", "test", "--device", device, "--decode", "nussinov", "--limit", "32" if quick else "0"], cwd=str(Path(__file__).resolve().parents[1]), check=False)
             results[f"external_{name}"] = "done"
 
     if "multitask" in directions:

@@ -132,7 +132,7 @@ python scripts/eval.py bench --config config/candidate.yaml --ckpt outputs/candi
 External bpRNA comparison:
 
 ```bash
-python scripts/run.py external --configs config/external_bprna_candidate.yaml config/external_bprna_norefine.yaml config/external_bprna_oldbase.yaml --dataset bprna --split random --device cuda --decode nussinov --bench_workers 8 --tag external_bprna
+python scripts/run.py external --configs config/candidate.yaml --dataset bprna --split random --device cuda --decode nussinov --bench_workers 8 --tag external_bprna
 ```
 
 Full reproduction details are in [release/reproduce.md](release/reproduce.md).

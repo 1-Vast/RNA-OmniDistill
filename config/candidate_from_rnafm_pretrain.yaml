@@ -22,17 +22,8 @@ model:
   num_heads: 8
   dropout: 0.1
   max_position_embeddings: 2048
-  pairhead: mlp
-  pairhidden: 512
-  pairdrop: 0.1
   distbias: true
-  distbuckets: 32
-  distmax: 512
   pairrefine: true
-  pairrefinechannels: 16
-  pairrefineblocks: 1
-  pairrefinedrop: 0.0
-  invalidlogit: -20.0
 
 training:
   batch_size: 24
@@ -41,30 +32,20 @@ training:
   weight_decay: 0.01
   warmup_steps: 500
   lambda_pair: 5.0
-  lambdaPair: 5.0
   lambda_struct: 1.0
   lambda_seq: 1.0
   pair_negative_ratio: 5
-  pairRatio: 5
   pair_positive_weight: 10.0
-  pairWeight: 10.0
-  pairUpper: true
-  pairLoop: 3
-  pairDiag: false
-  pairFloat: true
-  sampleNegOnGpu: true
   structure_positive_weight: 1.0
   grad_clip: 1.0
   amp: true
   seed: 42
   output_dir: outputs/candidate_from_rnafm_pretrain
-  out: outputs/candidate_from_rnafm_pretrain
   init_from_pretrain: outputs/seq_pretrain_rnafm/best.pt
   load_encoder_only: true
   save_best_by: val_loss
   early_stopping_patience: 10
   min_delta: 0.0001
-  resume_from: null
   log_every: 20
   train_decode_structures: false
   val_decode_samples: 16
@@ -76,11 +57,8 @@ decoding:
   use_nussinov: true
   allow_wobble: true
   decode_source: pair
-  source: pair
   pair_threshold: 0.25
-  threshold: 0.25
   nussinov_gamma: 2.0
-  gamma: 2.0
   topk_pairs: 20
 
 ablation:
@@ -91,7 +69,6 @@ ablation:
   use_motif_span_masking: false
   use_motif_condition: false
   use_family_condition: false
-  decode_source: pair
 
 baselines:
   run_all_dot: true

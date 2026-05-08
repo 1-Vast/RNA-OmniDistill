@@ -28,7 +28,7 @@ SAFE_COMPILE = [sys.executable, "-m", "py_compile", "agent/analyzer.py", "script
 SAFE_SMOKE = [sys.executable, "main.py", "smoke"]
 SAFE_AUDIT = [sys.executable, "scripts/audit.py", "clean", "--out", "outputs/clean"]
 
-DANGEROUS_ALWAYS = ["git push", "git commit", "git reset", "git checkout", "git clean", "&&", "||", ";", "|", ">", ">>", " rm ", " del ", "remove ", " mv ", " cp ", ".env", "api_key", "llm_api_key", "cuda_visible_devices", "pip install", "conda install", "curl ", "wget ", "config/fixed.yaml", "release/best_config.yaml"]
+DANGEROUS_ALWAYS = ["git push", "git commit", "git reset", "git checkout", "git clean", "&&", "||", ";", "|", ">", ">>", " rm ", " del ", "remove ", " mv ", " cp ", ".env", "api_key", "llm_api_key", "cuda_visible_devices", "pip install", "conda install", "curl ", "wget ", "release/best_config.yaml"]
 DANGEROUS_WRITE = ["rm ", "del ", "remove ", "mv ", "cp ", "overwrite", "淇敼閰嶇疆", "鍒犻櫎", "瑕嗙洊", ".env", "api_key", "llm_api_key", "cuda_visible_devices", "pip install", "conda install", "curl ", "wget "]
 DIAGNOSTIC_ARTIFACT_PATTERNS = ["benchmark.json", "predictions.jsonl", "best.pt", "checkpoint"]
 DIAGNOSTIC_COMMANDS = {"trace", "case", "doctor", "inspect", "compare", "diagnose", "report"}
@@ -52,7 +52,7 @@ def block_reason(raw: str, command: str) -> str | None:
 
 def validate_confirmed_command(cmd: list[str], intent: str) -> tuple[bool, str]:
     joined = " ".join(cmd[1:]).lower()
-    forbidden = [";", "&&", "||", "|", ">", ">>", " rm ", " del ", " remove ", " mv ", " cp ", "git", "pip", "conda", "curl", "wget", "config/fixed.yaml", "release/best_config.yaml", "dataset", "benchmark", "eval.py", "scripts/run.py", "cuda_visible_devices"]
+    forbidden = [";", "&&", "||", "|", ">", ">>", " rm ", " del ", " remove ", " mv ", " cp ", "git", "pip", "conda", "curl", "wget", "release/best_config.yaml", "dataset", "benchmark", "eval.py", "scripts/run.py", "cuda_visible_devices"]
     for item in forbidden:
         if item in f" {joined} ":
             return False, f"forbidden token: {item.strip()}"

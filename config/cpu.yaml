@@ -15,24 +15,17 @@ model:
   num_heads: 4
   dropout: 0.1
   max_position_embeddings: 512
-  pairhead: bilinear
-  distbias: false
 training:
   batch_size: 2
   epochs: 2
   lr: 0.0001
-  lambdaPair: 0.5
-  pairWeight: auto
-  pairRatio: 3
-  pairUpper: true
-  pairLoop: 3
-  pairDiag: false
-  pairFloat: true
+  lambda_pair: 0.5
+  pair_positive_weight: auto
+  pair_negative_ratio: 3
   lambda_struct: 1.0
   lambda_seq: 1.0
   amp: false
   seed: 42
-  out: outputs/cpu
   output_dir: outputs/cpu
   save_best_by: val_pair_f1
   log_every: 1
@@ -41,9 +34,9 @@ decoding:
   min_loop_length: 3
   use_nussinov: true
   allow_wobble: true
-  source: pair
-  threshold: 0.5
-  gamma: 1.0
+  decode_source: pair
+  pair_threshold: 0.5
+  nussinov_gamma: 1.0
 baselines:
   run_all_dot: true
   run_random_pair: true

@@ -819,7 +819,7 @@ def run_bench(args: argparse.Namespace) -> None:
     if not Path(args.ckpt).exists():
         raise SystemExit(
             "Checkpoint not found. Run: conda run -n DL python scripts\\run.py potential "
-            "--config config/fixed.yaml --mode full --device cuda"
+            "--config config/candidate.yaml --mode full --device cuda"
         )
     device = resolve_device(args.device)
     config, tokenizer, checkpoint = load_checkpoint(args.ckpt, device)
@@ -1159,7 +1159,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate RNA-OmniDiffusion.")
     sub = parser.add_subparsers(dest="cmd", required=True)
     bench = sub.add_parser("bench")
-    bench.add_argument("--config", default="config/fixed.yaml")
+    bench.add_argument("--config", default="config/candidate.yaml")
     bench.add_argument("--ckpt", required=True)
     bench.add_argument("--split", default="test", choices=["train", "val", "test"])
     bench.add_argument("--input")
@@ -1187,7 +1187,7 @@ def main() -> None:
     bench.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     bench.set_defaults(func=run_bench)
     export = sub.add_parser("export")
-    export.add_argument("--config", default="config/fixed.yaml")
+    export.add_argument("--config", default="config/candidate.yaml")
     export.add_argument("--ckpt", required=True)
     export.add_argument("--input", required=True)
     export.add_argument("--out", required=True)
@@ -1208,7 +1208,7 @@ def main() -> None:
     compare.add_argument("--out", required=True)
     compare.set_defaults(func=run_compare)
     token = sub.add_parser("token")
-    token.add_argument("--config", default="config/fixed.yaml")
+    token.add_argument("--config", default="config/candidate.yaml")
     token.add_argument("--ckpt", required=True)
     token.add_argument("--split", default="test", choices=["train", "val", "test"])
     token.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
