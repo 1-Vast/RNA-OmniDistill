@@ -5,7 +5,7 @@
 # - Teacher: frozen RNA-FM (sequence-level mean-pooled embedding only)
 # - No token-level distillation
 # - No pair prior
-# - No LLM semantic tokens
+# - No language-model-based structure prediction or semantic conditioning
 # - Loss: L_pretrain = L_denoise + lambda_distill * L_distill
 data:
   train_jsonl: dataset/unlabeled/train_seq_rnafm.jsonl

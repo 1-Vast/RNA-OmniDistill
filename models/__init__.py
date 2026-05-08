@@ -12,5 +12,5 @@ try:
         "RNAOmniTokenizer",
     ]
 except ImportError:
-    # Torch not installed; lightweight CLI commands (overview, models, agent) still work.
+    # Torch not installed; lightweight CLI commands (overview, models) still work.
     __all__ = []

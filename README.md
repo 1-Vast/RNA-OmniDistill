@@ -1,121 +1,106 @@
 # RNA-OmniDistill
 
-**Frozen RNA-FM Representation Distillation for Pair-Refined RNA Secondary Structure Prediction**
+Relational Masked Diffusion with Frozen RNA-FM Distillation for Constraint-Guided RNA Folding.
 
-This repository is organized as a compact, reproducible research codebase. The current model is not an LLM-powered system: it deliberately excludes external LLM calls, RNA 3D, ligand, and protein tasks. The main contribution is a trainable pair-logit model with lightweight 2D refinement and strict Nussinov decoding, augmented by frozen RNA-FM representation distillation.
+RNA-OmniDistill is a relation-aware masked diffusion framework for RNA secondary structure prediction. It formulates RNA folding as a discrete denoising problem over nucleotide tokens, structure tokens, and pair-relation variables. A compact student encoder is pretrained on sequence-only RNA data using masked nucleotide denoising and frozen RNA-FM sequence-level representation distillation. The pretrained encoder is then adapted to supervised pair-relation prediction with a pair-logit relation head and lightweight 2D relation refinement. Final structures are obtained through strict Nussinov constraint projection.
 
-## Framework
+RNA-OmniDistill 是一个关系感知的掩码离散扩散 RNA 折叠框架。它将 RNA 二级结构预测表述为核苷酸 token、结构 token 与碱基对关系变量的联合离散去噪问题。模型先在仅含序列的 RNA 数据上通过 masked nucleotide denoising 和冻结 RNA-FM sequence-level 表征蒸馏预训练紧凑 Student encoder，随后在真实结构标签上微调 pair-logit relation head 与轻量 2D relation refinement，最终通过严格 Nussinov 约束投影得到合法 RNA 二级结构。
 
-RNA-OmniDistill is a two-stage framework for RNA secondary structure prediction.
+## Overview
 
-### Stage 1: Sequence-only Teacher-guided Pretraining
-- **Input**: Unlabeled RNA sequences
-- **Task**: Masked nucleotide denoising
-- **Teacher**: Frozen RNA-FM (representation teacher only -- never predicts structures)
-- **Teacher signal**: Sequence-level mean-pooled embedding
-- **Loss**: L_pretrain = L_denoise + lambda_distill * L_distill
+The model uses:
 
-### Stage 2: Supervised Pairwise Structure Adaptation
-- **Input**: Labeled RNA secondary structures
-- **Loading**: Encoder-only from Stage 1 checkpoint
-- **Task**: Base-pair matrix prediction
-- **Modules**: Pair-logit head, lightweight 2D pair refinement, strict Nussinov decoding
-- **Loss**: L_finetune = L_token + lambda_pair * L_pair
-  (L_pair is the primary objective; L_token is auxiliary)
+- nucleotide tokens for RNA sequence denoising
+- structure tokens for task-conditioned folding/inverse-folding paths
+- pair-relation variables for base-pair supervision
+- a pair-relation field refined by lightweight 2D convolution
+- strict Nussinov constraint projection for valid non-crossing dot-bracket output
 
-### DeepSeek Agent (Read-Only)
-The optional LLM agent is an experiment assistant only:
-- Experiment auditing, diagnosis, scheduling, comparison, reporting
-- Dry-run prompt generation
-- Does NOT participate in forward pass, training loss, or benchmark inference
-- Does NOT modify labels, predictions, or metrics
+## Method Stages
 
-## Preliminary Result
+### Stage 1: Sequence-Only Pretraining
 
-A single preliminary run on ArchiveII:
-- Baseline candidate Pair F1 = 0.5849
-- RNA-FM distilled pretraining (actual-2704) Pair F1 = 0.5959
+- input: unlabeled RNA sequence
+- objective: masked nucleotide denoising
+- optional teacher: frozen RNA-FM sequence-level representation distillation
+- no structural labels
+- no pseudo pairs
 
-**This is a preliminary single-run positive signal and should not be interpreted as a stable improvement** before seed repeats, D-only ablation, external benchmarks, and larger unlabeled pretraining.
-
-Do not cite this as the main result. Do not claim statistical significance.
-
-## Core Structure
+The pretraining loss is:
 
 ```text
-main.py
-models/
-  omni.py        # Transformer, pair head, pair refinement, loss
-  decode.py      # strict Nussinov, greedy probe, staged decode helpers
-  mask.py        # masking helpers
-  dataset.py     # JSONL dataset
-  collator.py    # task sampling and labels
-  token.py       # RNA tokenizer
-  pairprior.py   # optional diagnostic pair-prior probe, disabled by default
-agent/
-  cli.py         # Agent CLI and interactive shell implementation
-  analyzer.py    # LLM analysis agent; not used for inference
-  runtime.py     # Agent runtime guards
-scripts/
-  data.py        # data preparation CLI
-  eval.py        # benchmark, export, analysis, diagnosis
-  run.py         # potential, sweep, external, ablation workflows
-  audit.py       # clean/name/config audits
-  probe.py       # smoke and small sanity checks
-  llm.py         # compatibility wrapper for the Agent CLI
-release/
-  paper.md       # 2026 paper framework
-  results_summary.md
-  reproduce.md
-  model_card.md
+L_pretrain = L_denoise + lambda_d * L_distill
 ```
 
-## Reproduce
+### Stage 2: Supervised Pair-Relation Adaptation
 
-See `python main.py overview` and `python main.py params --config config/candidate.yaml` for the framework map and tunable parameters.
+- encoder-only initialization from Stage 1
+- pair-logit relation head
+- pair-relation BCE / weighted pair loss
+- lightweight 2D relation refinement
+- optional token auxiliary objective when enabled by the config
 
-Agent shell is safety-hardened for long-running research workflows; see `docs/agent.md`.
+The fine-tuning loss is:
 
-For interactive use, run `python agent.py` or see `docs/agent_guide.md`.
+```text
+L_finetune = L_pair + optional token auxiliary
+```
 
-Sweep decoding, audit collator, and trial config tools are available; see `docs/usage.md`.
+### Stage 3: Strict Nussinov Decoding
 
-## RNA-FM Frozen Teacher Pretraining
+- canonical base-pair constraints
+- minimum loop length
+- non-crossing dynamic programming projection
+- final dot-bracket structure output
 
-RNA-FM is supported only as an optional frozen representation teacher for **sequence-level** self-supervised pretraining. It provides mean-pooled embedding vectors per sequence. It does NOT perform token-level distillation, predict dot-bracket structures, generate pseudo pair labels, or participate in benchmark inference.
+## RNA-FM Teacher Boundary
 
-Offline teacher extraction writes one mean-pooled embedding vector per sequence into a single `.npy` matrix and an index JSONL:
+RNA-FM does:
+
+- serve as a frozen sequence-level representation teacher
+- provide a continuous prior for sequence-only pretraining
+- produce one mean-pooled embedding vector per sequence
+
+RNA-FM does not:
+
+- predict dot-bracket structures
+- generate pair labels
+- participate in benchmark inference
+- replace RNA-OmniDistill
+
+Offline teacher extraction writes mean-pooled embeddings to ignored local files:
 
 ```bash
 python scripts/extract_rnafm_embeddings.py --input dataset/archive/train.jsonl --output_jsonl dataset/unlabeled/train_seq_rnafm.jsonl --output_npy dataset/teacher_emb/rnafm/train_embeddings.npy --dummy --limit 256 --embedding_dim 640 --overwrite
 python scripts/extract_rnafm_embeddings.py --input dataset/archive/val.jsonl --output_jsonl dataset/unlabeled/val_seq_rnafm.jsonl --output_npy dataset/teacher_emb/rnafm/val_embeddings.npy --dummy --limit 64 --embedding_dim 640 --overwrite
 ```
 
-Then run the sequence-only distillation pretrain path and encoder-only fine-tune path:
+Use `--dummy` only for pipeline smoke tests. Real RNA-FM loading is isolated in `models/teacher/rnafm_teacher.py`; the core student model does not import external RNA-FM code.
 
-```bash
-python main.py train --config config/seq_pretrain_rnafm.yaml --device cuda --max_steps 20
-python main.py train --config config/candidate_from_rnafm_pretrain.yaml --device cuda --max_steps 20
-```
+## Experiments
 
-Use `--dummy` only for pipeline smoke tests. Real RNA-FM loading is isolated in `models/teacher/rnafm_teacher.py`; `models/omni.py` never imports external RNA-FM code.
+Core experiment paths:
 
-Show framework:
+- baseline supervised candidate
+- D-only sequence pretraining
+- D-RNAFM frozen teacher distillation
+- Rfam / bpRNA / RNAcentral data processing
+- seed repeat experiments
+- external benchmark experiments
+- low-label experiments
+- scale-up pretraining experiments
+
+Common commands:
 
 ```bash
 python main.py overview
-```
-
-Smoke:
-
-```bash
 python main.py smoke
-```
-
-Train candidate:
-
-```bash
+python main.py params --config config/candidate.yaml
 python main.py train --config config/candidate.yaml --device cuda
+python main.py train --config config/seq_pretrain.yaml --device cuda
+python main.py train --config config/candidate_from_seq_pretrain.yaml --device cuda
+python main.py train --config config/seq_pretrain_rnafm.yaml --device cuda
+python main.py train --config config/candidate_from_rnafm_pretrain.yaml --device cuda
 ```
 
 Strict Nussinov benchmark:
@@ -124,88 +109,69 @@ Strict Nussinov benchmark:
 python scripts/eval.py bench --config config/candidate.yaml --ckpt outputs/candidate/best.pt --split test --device cuda --decode nussinov --stage_logits --workers 8 --chunksize 2 --profile
 ```
 
-Decode-only scan from staged logits:
-
-```bash
-python scripts/eval.py bench --config config/candidate.yaml --ckpt outputs/candidate/best.pt --split test --device cuda --decode nussinov --decode_only --workers 8 --chunksize 2 --profile --scan config/scan.json
-```
-
 External bpRNA comparison:
 
 ```bash
 python scripts/run.py external --configs config/candidate.yaml --dataset bprna --split random --device cuda --decode nussinov --bench_workers 8 --tag external_bprna
 ```
 
-Full reproduction details are in [release/reproduce.md](release/reproduce.md).
-For training and Agent usage details, see [docs/usage.md](docs/usage.md).
-
-## DeepSeek Agent (Read-Only Experiment Assistant)
-
-The optional LLM agent is an experiment assistant, not a structure predictor. It only reads existing artifacts and writes Markdown/JSON reports. It never modifies labels, predictions, benchmark metrics, or test data.
-
-The Agent is a read-only experiment assistant. It does not run forward passes, compute training loss, execute benchmark inference, modify labels/predictions/metrics, or serve as a structure predictor. No agent output is used to claim model performance improvements.
-
-Environment variables are read from `.env`:
+## Core Structure
 
 ```text
-LLM_BASE_URL=...
-LLM_API_KEY=...
-LLM_MODEL=...
+main.py
+models/
+  omni.py
+  training.py
+  dataset.py
+  collator.py
+  decode.py
+  teacher/rnafm_teacher.py
+scripts/
+  extract_rnafm_embeddings.py
+  data.py
+  eval.py
+  run.py
+  audit.py
+config/
+  candidate.yaml
+  seq_pretrain.yaml
+  candidate_from_seq_pretrain.yaml
+  seq_pretrain_rnafm.yaml
+  candidate_from_rnafm_pretrain.yaml
+docs/
+  rna_omnidistill.md
+  dataset_processing_and_splits.md
+  usage.md
 ```
 
-Four analysis functions are available:
+## Data Paths
 
-```bash
-python scripts/llm.py diagnose --run outputs/candidate --out outputs/llm/diagnose
-python scripts/llm.py schedule --run outputs/candidate --config config/candidate.yaml --out outputs/llm/schedule
-python scripts/llm.py report --inputs release/paper.md release/results_summary.md release/limits.md --out outputs/llm/report
-python scripts/llm.py auditdata --inputs dataset/archive/train.jsonl dataset/archive/test.jsonl --out outputs/llm/data
-```
+Data processing and experiment split notes are in [docs/dataset_processing_and_splits.md](docs/dataset_processing_and_splits.md).
 
-Use `--dry_run` to inspect the exact prompt without calling the API.
+Important local artifacts are ignored by git:
 
-### Interactive Agent Shell
-
-```bash
-python scripts/llm.py agent --dry_run
-```
-
-Example commands: `diagnose`, `schedule`, `report`, `auditdata`, `inspect`, `trace`, `compare`, `case`, `doctor`, `运行 smoke`, `运行 audit`, `检查 candidate`, `综合诊断`, `清理旧报告`, `/usage`, `/memory`, `/cleanup 10`, `/last`, `/open`, `/quiet`/`/normal`/`/verbose`, `/exit`.
-
-The shell is read-only and does not run training or benchmark inference. Use `--dry_run` or `--no_api` to generate prompts without API calls.
-
-Safety guards: candidate training requires explicit confirmation (`进行训练 candidate`); unsafe benchmark execution remains blocked; API calls guarded by `max_api_calls`, `max_tokens_total`, `api_timeout`, retry count, and repeated prompt guard; shell commands use `command_timeout`/`train_timeout`; loop/stall detection for repeated inputs and failed commands; `/cleanup` keeps the most recent 10 report dirs (only `outputs/llm*` locations); clean audit includes behavior-based checks for command parsing, dangerous-command blocking, and cleanup root safety. Output stays concise by default. The shell stores lightweight tuning history and conclusions in `outputs/llm_shell/memory.jsonl`, excluding passwords, API keys, labels, predictions, checkpoints, and metric rewrites.
-
-```bash
-python scripts/llm.py agent --dry_run --api_timeout 60 --command_timeout 120 --train_timeout 0
-```
-
-Diagnostics (inspect existing artifacts only):
-
-```text
-agent> inspect outputs/candidate
-agent> trace config/candidate.yaml outputs/candidate/best.pt outputs/candidate/benchmark.json
-agent> compare outputs/candidate outputs/oldbase
-agent> case outputs/candidate/predictions.jsonl
-agent> doctor outputs/candidate config/candidate.yaml
-```
+- `outputs/`
+- `dataset/unlabeled/`
+- `dataset/teacher_emb/`
+- large `dataset/processed/` files
+- checkpoints and tensor dumps (`*.pt`, `*.pth`, `*.ckpt`, `*.npy`, `*.safetensors`)
+- `external/model.safetensors`
+- `.env`
 
 ## What Not To Claim
 
-- Do not claim LLM semantic conditioning as a positive result. It was tested and did not improve the model-level result.
-- Do not use greedy decode as the final paper metric. It is only a fast pair-head probe.
-- Do not use token-only decode as a strict structural result. Its valid structure rate was 0 in diagnostics.
-- Do not present masking as a main contribution on ArchiveII. The seed repeat found the effect inconclusive or negligible.
-- Do not describe this as RNA 3D, ligand, protein, RNA-FM, or Agent work.
-- Do not present pair-prior as a candidate-model contribution. It is an optional weak diagnostic probe only; see [docs/pairprior_probe.md](docs/pairprior_probe.md).
-- Do not claim RNA-FM distillation as a stable result without seed repeats.
-- Do not describe DeepSeek Agent as improving model performance.
-- Do not claim token-level distillation (only sequence-level).
-- Do not claim RNA-FM structural prior or pseudo pair labels.
+- not RNA-FM structure prediction
+- not token-level distillation
+- not pair prior
+- not language-model semantic conditioning
+- not a foundation model
+- not a language-model-powered system
+- no pseudo pair labels
+- no RNA-FM structural prior
 
 ## Current Limitations
 
-- Precision is still lower than recall, and pair ratio remains above 1.0.
+- Precision is still lower than recall in the current candidate path.
 - Family-disjoint generalization is not established as a final claim.
-- The model is moderate-scale and from scratch; it is not a foundation model trained on massive unlabeled RNA corpora.
-- Strict Nussinov is essential for valid structures, so decoding is part of the model system.
+- RNA-FM distillation requires seed repeats and larger unlabeled pretraining before being treated as stable evidence.
+- Strict Nussinov projection is part of the system, not an optional post-hoc decoration.

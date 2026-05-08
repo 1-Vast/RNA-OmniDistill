@@ -23,11 +23,10 @@
 - Seq2struct is the primary validated task.
 - Inverse folding and inpainting exist in the pipeline but remain preliminary.
 
-## LLM Semantic Conditioning
+## Semantic Conditioning
 
 - Semantic prefixing, constraint-program prompting, motif repair, and low-data adaptation were tested and did not produce model-level gains at current scale.
-- LLM semantic conditioning is excluded from the candidate model.
-- See [../docs/llm_negative_result.md](../docs/llm_negative_result.md).
+- No language-model-based structure prediction or semantic conditioning is used in the candidate model.
 
 ## Conflict Loss
 

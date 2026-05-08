@@ -64,7 +64,7 @@ RNA secondary structure prediction from RNA sequence input. The validated infere
 - Greedy decoding is not a final benchmark metric.
 - Masking variants are not a main contribution on ArchiveII.
 - Conflict loss is not a positive result in current experiments.
-- LLM semantic conditioning is not a positive result.
+- No language-model-based structure prediction or semantic conditioning is used.
 
 ## Limitations
 

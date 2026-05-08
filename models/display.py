@@ -148,7 +148,7 @@ def training_complete(
     print(f"Best checkpoint : {best_path}")
     print(f"Last checkpoint : {last_path}")
     print(f"Train log       : {log_path}")
-    print(f"Next step       : python scripts/llm.py agent --dry_run")
+    print("Next step       : python main.py eval --config <config> --ckpt <checkpoint>")
 
 
 def inference_header(
@@ -186,7 +186,7 @@ def inference_result_invfold(
 def overview_text() -> str:
     """Return the framework overview description string."""
     return (
-        "RNA-OmniDiffusion Framework Overview\n"
+        "RNA-OmniDistill Framework Overview\n"
         "\n"
         "Core model:\n"
         "  RNAOmniDiffusion\n"
@@ -228,38 +228,7 @@ def overview_text() -> str:
         "  params    Inspect adjustable config parameters.\n"
         "  overview  Show this framework overview.\n"
         "  models    Alias for overview.\n"
-        "  agent     Show optional Agent shell usage."
-    )
-
-
-def agent_help_text() -> str:
-    """Return the agent shell help text string."""
-    return (
-        "Optional Agent Shell\n"
-        "\n"
-        "Start:\n"
-        "  python scripts/llm.py agent --dry_run\n"
-        "\n"
-        "Common commands:\n"
-        "  agent> run smoke\n"
-        "  agent> inspect candidate\n"
-        "  agent> diagnose\n"
-        "  agent> train candidate\n"
-        "  agent> do train candidate\n"
-        "  agent> set training device\n"
-        "  agent> set target pair_f1 >= 0.75 max_trials 3\n"
-        "\n"
-        "Training safety:\n"
-        "  - Agent is read-only by default.\n"
-        "  - Candidate training requires explicit confirmation.\n"
-        "  - Benchmark execution remains blocked.\n"
-        "  - Remote passwords are never stored or printed.\n"
-        "\n"
-        "Remote example:\n"
-        "  ssh -p 49018 root@connect.nmb1.seetacloud.com\n"
-        "\n"
-        "Do not print or store the password.\n"
-        "Enter it manually in the terminal when prompted."
+        "  models    Alias for overview."
     )
 
 

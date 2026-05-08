@@ -183,7 +183,7 @@ DATASETS: Dict[str, Dict[str, Any]] = {
 # Network helpers
 # ---------------------------------------------------------------------------
 
-USER_AGENT = "RNA-OmniDiffusion-downloader/1.0"
+HTTP_CLIENT_NAME = "RNA-OmniDiffusion-downloader/1.0"
 
 
 def _make_ssl_context() -> ssl.SSLContext:
@@ -200,7 +200,7 @@ def _download_file(url: str, dest: Path, timeout: int = 60) -> Tuple[bool, str]:
     tmp = dest.with_suffix(dest.suffix + ".part")
 
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        req = urllib.request.Request(url, headers={"User-Agent": HTTP_CLIENT_NAME})
         with urllib.request.urlopen(req, timeout=timeout, context=_make_ssl_context()) as resp:
             with open(tmp, "wb") as f:
                 shutil.copyfileobj(resp, f, length=128 * 1024)

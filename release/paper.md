@@ -133,7 +133,7 @@ Conflict loss was tested as a precision-oriented regularizer but should be repor
    - Token-only decode fails validity.
    - Greedy decode is useful only as a probe.
    - Masking variants are not a main contribution on ArchiveII.
-   - Conflict loss and LLM semantic conditioning are not positive model contributions in the current evidence.
+   - Conflict loss and language-model-based semantic conditioning are not positive model contributions in the current evidence.
 
 ## Experimental Program
 
@@ -244,7 +244,7 @@ Supported:
 
 Not supported:
 
-- LLM semantic conditioning improves the model.
+- Language-model-based semantic conditioning improves the model.
 - Token-only decoding is structurally valid.
 - Greedy decoding is a final benchmark.
 - Masking variants are a main contribution.
