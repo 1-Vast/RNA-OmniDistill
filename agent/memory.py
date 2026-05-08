@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import re
@@ -9,7 +9,7 @@ from typing import Any
 
 SENSITIVE_PATTERNS = (
     re.compile(r"(password|api[_-]?key|llm_api_key|token)\s*[:=]\s*\S+", re.IGNORECASE),
-    re.compile(r"(密码)\s*[:=：]\s*\S+", re.IGNORECASE),
+    re.compile(r"(\u5bc6\u7801)\s*[:=\uff1a]\s*\S+", re.IGNORECASE),
 )
 
 

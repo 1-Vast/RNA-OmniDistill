@@ -1,14 +1,14 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import sys
 
 CONFIRM_TRAIN = {
-    "进行训练",
-    "进行训练 candidate",
-    "确认训练",
-    "确认训练 candidate",
-    "执行训练",
-    "执行训练 candidate",
+    "杩涜璁粌",
+    "杩涜璁粌 candidate",
+    "纭璁粌",
+    "纭璁粌 candidate",
+    "鎵ц璁粌",
+    "鎵ц璁粌 candidate",
     "yes train",
     "yes train candidate",
     "run train",
@@ -16,20 +16,20 @@ CONFIRM_TRAIN = {
     "execute train",
 }
 CONFIRM_BENCH = {
-    "进行 benchmark",
-    "确认 benchmark",
-    "执行 benchmark",
+    "杩涜 benchmark",
+    "纭 benchmark",
+    "鎵ц benchmark",
     "yes benchmark",
     "run benchmark",
     "execute benchmark",
 }
 TRAIN_COMMAND = [sys.executable, "main.py", "train", "--config", "config/candidate.yaml", "--device", "cuda"]
-SAFE_COMPILE = [sys.executable, "-m", "py_compile", "models/agent/analyzer.py", "scripts/llm.py"]
+SAFE_COMPILE = [sys.executable, "-m", "py_compile", "agent/analyzer.py", "scripts/llm.py"]
 SAFE_SMOKE = [sys.executable, "main.py", "smoke"]
 SAFE_AUDIT = [sys.executable, "scripts/audit.py", "clean", "--out", "outputs/clean"]
 
 DANGEROUS_ALWAYS = ["git push", "git commit", "git reset", "git checkout", "git clean", "&&", "||", ";", "|", ">", ">>", " rm ", " del ", "remove ", " mv ", " cp ", ".env", "api_key", "llm_api_key", "cuda_visible_devices", "pip install", "conda install", "curl ", "wget ", "config/fixed.yaml", "release/best_config.yaml"]
-DANGEROUS_WRITE = ["rm ", "del ", "remove ", "mv ", "cp ", "overwrite", "修改配置", "删除", "覆盖", ".env", "api_key", "llm_api_key", "cuda_visible_devices", "pip install", "conda install", "curl ", "wget "]
+DANGEROUS_WRITE = ["rm ", "del ", "remove ", "mv ", "cp ", "overwrite", "淇敼閰嶇疆", "鍒犻櫎", "瑕嗙洊", ".env", "api_key", "llm_api_key", "cuda_visible_devices", "pip install", "conda install", "curl ", "wget "]
 DIAGNOSTIC_ARTIFACT_PATTERNS = ["benchmark.json", "predictions.jsonl", "best.pt", "checkpoint"]
 DIAGNOSTIC_COMMANDS = {"trace", "case", "doctor", "inspect", "compare", "diagnose", "report"}
 

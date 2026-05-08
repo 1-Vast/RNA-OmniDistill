@@ -336,6 +336,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Optional short-run step cap for sanity checks",
     )
+    train.add_argument(
+        "--train_subset",
+        type=int,
+        help="Optional number of training samples for sanity checks",
+    )
     train.set_defaults(func=_run_train)
 
     eval_parser = subparsers.add_parser(
@@ -410,6 +415,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 _AUDIT_REEXPORTS: frozenset[str] = frozenset({
     "load_config",
+    "load_checkpoint",
     "build_model",
     "loss_from_batch",
     "move_batch_to_device",

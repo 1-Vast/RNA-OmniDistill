@@ -51,14 +51,17 @@ models/
   collator.py    # task sampling and labels
   token.py       # RNA tokenizer
   pairprior.py   # optional diagnostic pair-prior probe, disabled by default
-  agent/         # LLM analysis agent; not used for inference
+agent/
+  cli.py         # Agent CLI and interactive shell implementation
+  analyzer.py    # LLM analysis agent; not used for inference
+  runtime.py     # Agent runtime guards
 scripts/
   data.py        # data preparation CLI
   eval.py        # benchmark, export, analysis, diagnosis
   run.py         # potential, sweep, external, ablation workflows
   audit.py       # clean/name/config audits
   probe.py       # smoke and small sanity checks
-  llm.py         # analysis agent CLI for diagnostics and reports
+  llm.py         # compatibility wrapper for the Agent CLI
 release/
   paper.md       # 2026 paper framework
   results_summary.md
@@ -75,6 +78,26 @@ Agent shell is safety-hardened for long-running research workflows; see `docs/ag
 For interactive use, run `python agent.py` or see `docs/agent_guide.md`.
 
 Sweep decoding, audit collator, and trial config tools are available; see `docs/usage.md`.
+
+## RNA-FM Frozen Teacher Pretraining
+
+RNA-FM is supported only as an optional frozen representation teacher for sequence-level self-supervised pretraining. It is not the main model, does not predict dot-bracket structures, does not generate pseudo pair labels, and is not used during benchmark inference. RNA-OmniDiffusion remains the student model used for structure prediction: Transformer encoder, pair head, optional 2D pair refinement, and strict Nussinov decoding.
+
+Offline teacher extraction writes one mean-pooled embedding vector per sequence into a single `.npy` matrix and an index JSONL:
+
+```bash
+python scripts/extract_rnafm_embeddings.py --input dataset/archive/train.jsonl --output_jsonl dataset/unlabeled/train_seq_rnafm.jsonl --output_npy dataset/teacher_emb/rnafm/train_embeddings.npy --dummy --limit 256 --embedding_dim 640 --overwrite
+python scripts/extract_rnafm_embeddings.py --input dataset/archive/val.jsonl --output_jsonl dataset/unlabeled/val_seq_rnafm.jsonl --output_npy dataset/teacher_emb/rnafm/val_embeddings.npy --dummy --limit 64 --embedding_dim 640 --overwrite
+```
+
+Then run the sequence-only distillation pretrain path and encoder-only fine-tune path:
+
+```bash
+python main.py train --config config/seq_pretrain_rnafm.yaml --device cuda --max_steps 20
+python main.py train --config config/candidate_from_rnafm_pretrain.yaml --device cuda --max_steps 20
+```
+
+Use `--dummy` only for pipeline smoke tests. Real RNA-FM loading is isolated in `models/teacher/rnafm_teacher.py`; `models/omni.py` never imports external RNA-FM code.
 
 Show framework:
 

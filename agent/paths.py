@@ -1,4 +1,4 @@
-"""Run discovery helper: find recent experiment directories under outputs/."""
+﻿"""Run discovery helper: find recent experiment directories under outputs/."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import math
@@ -13,7 +13,7 @@ from typing import Any
 from utils.struct import canonical_pair, parse_dot_bracket, validate_structure
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 
 
 SYSTEM_PROMPT = """You are an RNA secondary-structure experiment analysis agent.

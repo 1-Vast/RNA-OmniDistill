@@ -1,10 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 from pathlib import Path
 from typing import Any
 
-from models.agent.analyzer import write_json, write_markdown
+from agent.analyzer import write_json, write_markdown
 
 
 def prompt_hash(prompt: str) -> str:

@@ -64,6 +64,7 @@ def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
         if src in training:
             training[dst] = training[src]
     training.setdefault("lambda_pair", training.get("lambdaPair", 0.5))
+    training.setdefault("lambda_distill", training.get("lambdaDistill", 0.0))
     training.setdefault("pair_positive_weight", training.get("pairWeight", "auto"))
     training.setdefault("pair_negative_ratio", training.get("pairRatio", 3))
     training.setdefault("output_dir", training.get("out", "outputs/archive"))
@@ -84,6 +85,10 @@ def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     model.setdefault("distbuckets", 32)
     model.setdefault("distmax", data.get("max_length", 512))
     model.setdefault("invalidlogit", -20.0)
+    model.setdefault("distill_dim", model.get("rnafm_embedding_dim", 0))
+    tasks = config.setdefault("tasks", {})
+    if "seq_denoise" in tasks and "denoise" not in tasks:
+        tasks["denoise"] = tasks["seq_denoise"]
     return config
 
 
@@ -191,8 +196,9 @@ def ensure_dataset_paths(config: Dict[str, Any], create_if_missing: bool) -> Non
 
 def build_datasets_and_tokenizer(config: Dict[str, Any]) -> tuple[RNAOmniDataset, RNAOmniDataset, RNAOmniTokenizer]:
     max_length = int(config["data"]["max_length"])
-    train_dataset = RNAOmniDataset(config["data"]["train_jsonl"], max_length=max_length)
-    val_dataset = RNAOmniDataset(config["data"]["val_jsonl"], max_length=max_length)
+    allow_unlabeled = bool(config["data"].get("allow_unlabeled", False))
+    train_dataset = RNAOmniDataset(config["data"]["train_jsonl"], max_length=max_length, allow_unlabeled=allow_unlabeled)
+    val_dataset = RNAOmniDataset(config["data"]["val_jsonl"], max_length=max_length, allow_unlabeled=allow_unlabeled)
     tokenizer = RNAOmniTokenizer.from_samples(train_dataset.samples + val_dataset.samples)
     return train_dataset, val_dataset, tokenizer
 
@@ -219,8 +225,48 @@ def build_model(config: Dict[str, Any], tokenizer: RNAOmniTokenizer, device: tor
         pairrefinechannels=int(model_cfg.get("pairrefinechannels", 16)),
         pairrefineblocks=int(model_cfg.get("pairrefineblocks", 1)),
         pairrefinedrop=float(model_cfg.get("pairrefinedrop", 0.0)),
+        distill_dim=int(model_cfg.get("distill_dim", model_cfg.get("rnafm_embedding_dim", 0)) or 0),
+        use_distill_head=bool(model_cfg.get("use_distill_head", False)),
+        teacher_dim=int(model_cfg.get("teacher_dim", 640)),
+        distill_pool=str(model_cfg.get("distill_pool", "mean")),
     )
     return model.to(device)
+
+
+ENCODER_PRETRAIN_PREFIXES = (
+    "token_embedding.",
+    "position_embedding.",
+    "segment_embedding.",
+    "task_embedding.",
+    "time_mlp.",
+    "encoder.",
+    "norm.",
+)
+
+
+def load_encoder_only_pretrain(model: RNAOmniDiffusion, ckpt_path: str | Path, device: torch.device) -> dict:
+    _, _, checkpoint = load_checkpoint(ckpt_path, device)
+    source = checkpoint["model_state"]
+    target = model.state_dict()
+    selected = {}
+    skipped = []
+    for key, value in source.items():
+        if not key.startswith(ENCODER_PRETRAIN_PREFIXES):
+            continue
+        if key not in target:
+            skipped.append(key)
+            continue
+        if tuple(target[key].shape) != tuple(value.shape):
+            skipped.append(key)
+            continue
+        selected[key] = value
+    missing, unexpected = model.load_state_dict(selected, strict=False)
+    return {
+        "loaded": sorted(selected),
+        "skipped": sorted(skipped),
+        "missing": sorted(missing),
+        "unexpected": sorted(unexpected),
+    }
 
 
 def make_loader(
@@ -400,6 +446,8 @@ def estimate_loss_options(config: Dict[str, Any], dataset: RNAOmniDataset, token
         "lambda_pair": float(training.get("lambda_pair", 0.5)),
         "lambda_seq": float(training.get("lambda_seq", 1.0)),
         "lambda_struct": float(training.get("lambda_struct", 1.0)),
+        "lambda_distill": float(training.get("lambda_distill", 0.0)),
+        "distill_loss_type": str(training.get("distill_loss", training.get("distill_loss_type", "mse"))),
         "token_id_weights": token_weights,
         "pair_pos_weight": pair_pos_weight,
         "pair_options": {
@@ -431,12 +479,14 @@ def loss_from_batch(outputs: dict, batch: dict, loss_options: dict) -> dict:
         pair_pos_weight=loss_options["pair_pos_weight"],
         use_pair_loss=loss_options["use_pair_loss"],
         pair_options=loss_options.get("pair_options"),
+        lambda_distill=loss_options.get("lambda_distill", 0.0),
+        distill_loss_type=loss_options.get("distill_loss_type", "mse"),
     )
 
 
 def update_running(total: dict, loss_dict: dict, batch_size: int) -> None:
     total["samples"] += batch_size
-    for key in ("loss", "token_loss", "pair_loss", "conflict_loss"):
+    for key in ("loss", "token_loss", "pair_loss", "conflict_loss", "distill_loss"):
         total[key] += float(loss_dict[key].detach().cpu()) * batch_size
     for key in (
         "pos",
@@ -460,6 +510,8 @@ def update_running(total: dict, loss_dict: dict, batch_size: int) -> None:
         "lambdaConflict",
         "mean_row_pair_prob_sum",
         "max_row_pair_prob_sum",
+        "lambda_distill",
+        "teacher_mask_ratio",
     ):
         value = loss_dict.get(key)
         if value is None:
@@ -479,6 +531,7 @@ def averages(total: dict, prefix: str) -> dict:
         f"{prefix}_token_loss": total["token_loss"] / denom,
         f"{prefix}_pair_loss": total["pair_loss"] / denom,
         f"{prefix}_conflict_loss": total["conflict_loss"] / denom,
+        f"{prefix}_distill_loss": total["distill_loss"] / denom,
     }
     for key in (
         "pos",
@@ -502,6 +555,8 @@ def averages(total: dict, prefix: str) -> dict:
         "lambdaConflict",
         "mean_row_pair_prob_sum",
         "max_row_pair_prob_sum",
+        "lambda_distill",
+        "teacher_mask_ratio",
     ):
         count = total.get(f"{key}_count", 0)
         if count:
@@ -570,7 +625,7 @@ def evaluate_model(
     decode_structures: bool = True,
 ) -> dict:
     model.eval()
-    totals = {"samples": 0, "loss": 0.0, "token_loss": 0.0, "pair_loss": 0.0, "conflict_loss": 0.0}
+    totals = {"samples": 0, "loss": 0.0, "token_loss": 0.0, "pair_loss": 0.0, "conflict_loss": 0.0, "distill_loss": 0.0}
     token_correct = 0
     token_count = 0
     pair_diag = {
@@ -642,7 +697,9 @@ def format_epoch_metrics(metrics: dict) -> str:
         "train_token_loss",
         "train_pair_loss",
         "train_conflict_loss",
+        "train_distill_loss",
         "val_loss",
+        "val_distill_loss",
         "val_token_acc",
         "val_pair_precision",
         "val_pair_recall",
@@ -697,6 +754,18 @@ def train_model(
         torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.benchmark = True
     model = build_model(config, tokenizer, device)
+    pretrain_load_report = None
+    init_from_pretrain = config["training"].get("init_from_pretrain")
+    if init_from_pretrain:
+        if bool(config["training"].get("load_encoder_only", False)):
+            report = load_encoder_only_pretrain(model, init_from_pretrain, device)
+            pretrain_load_report = report
+            print(f"Loaded encoder-only pretrain from {init_from_pretrain}: {len(report['loaded'])} tensors.")
+        else:
+            _, _, checkpoint = load_checkpoint(init_from_pretrain, device)
+            model.load_state_dict(checkpoint["model_state"], strict=False)
+            pretrain_load_report = {"loaded": list(checkpoint["model_state"]), "skipped": []}
+            print(f"Loaded pretrain weights from {init_from_pretrain}.")
     train_loader = make_loader(train_dataset_for_loader, tokenizer, config, shuffle=True)
     val_loader = make_loader(val_dataset, tokenizer, config, shuffle=False)
 
@@ -760,7 +829,7 @@ def train_model(
     for epoch in range(start_epoch, int(config["training"]["epochs"]) + 1):
         epoch_start = time.time()
         model.train()
-        train_totals = {"samples": 0, "loss": 0.0, "token_loss": 0.0, "pair_loss": 0.0, "conflict_loss": 0.0}
+        train_totals = {"samples": 0, "loss": 0.0, "token_loss": 0.0, "pair_loss": 0.0, "conflict_loss": 0.0, "distill_loss": 0.0}
         for batch in train_loader:
             batch = move_batch_to_device(batch, device)
             optimizer.zero_grad(set_to_none=True)
@@ -782,7 +851,8 @@ def train_model(
                     f"loss={float(loss.detach().cpu()):.4f} "
                     f"token={float(loss_dict['token_loss'].cpu()):.4f} "
                     f"pair={float(loss_dict['pair_loss'].cpu()):.4f} "
-                    f"conflict={float(loss_dict['conflict_loss'].cpu()):.4f}"
+                    f"conflict={float(loss_dict['conflict_loss'].cpu()):.4f} "
+                    f"distill={float(loss_dict['distill_loss'].cpu()):.4f}"
                 )
             if max_steps is not None and global_step >= max_steps:
                 break
@@ -824,6 +894,10 @@ def train_model(
             "pairrefine": bool(config.get("model", {}).get("pairrefine", False)),
             "conflict_loss": averages(train_totals, "train").get("train_conflict_loss", 0.0),
             "lambdaConflict": float(config["training"].get("lambdaConflict", 0.0)),
+            "init_from_pretrain": str(init_from_pretrain or ""),
+            "load_encoder_only": bool(config["training"].get("load_encoder_only", False)),
+            "pretrain_loaded_keys": len(pretrain_load_report["loaded"]) if pretrain_load_report else 0,
+            "pretrain_skipped_keys": len(pretrain_load_report["skipped"]) if pretrain_load_report else 0,
         }
         history.append(epoch_metrics)
         print(epoch_line(epoch_metrics, epoch, int(config["training"]["epochs"])))

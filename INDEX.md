@@ -14,16 +14,18 @@
 - `models/collator.py`: task sampling, masking, segment ids, pair labels.
 - `models/token.py`: RNA tokenizer.
 - `models/pairprior.py`: optional diagnostic pair-prior probe, disabled by default.
+- `models/teacher/rnafm_teacher.py`: optional frozen RNA-FM representation teacher adapter for offline sequence embedding extraction.
 - `agent.py`: Thin root-level launcher for the Agent shell. Run `python agent.py` to start.
 - `agent.cmd`: Windows CMD launcher. Run `agent` in cmd.exe.
-- `agent`: Unix shell launcher. Run `bash agent` on Linux/macOS.
-- `models/agent/analyzer.py`: LLM analysis agent for diagnostics, scheduling, paper reporting, and data audit.
-- `models/agent/runtime.py`: Runtime guard with API/token limits, repeated-prompt detection, and consecutive error/blocked circuit breaker.
-- `models/agent/memory.py`: Memory persistence with sanitization, file-level compact, and CORRUPT/error preservation.
-- `models/agent/env.py`: Runtime environment detection (platform, hostname, CUDA, local/remote guess).
-- `models/agent/paths.py`: Run discovery helper for recent experiment directories.
-- `models/agent/cleanup.py`: Safe cleanup of old report directories.
-- `models/agent/safety.py`: Command blocking, confirmation gates, safe-command whitelists.
+- `agent.sh`: Unix shell launcher. Run `bash agent.sh` on Linux/macOS.
+- `agent/cli.py`: CLI and interactive shell for the optional LLM analysis agent. Supports /runs, /memory compact, agent_audit safety checks. Includes inspect, trace, compare, case, doctor, target tuning, and confirmation-gated training.
+- `agent/analyzer.py`: LLM analysis agent for diagnostics, scheduling, paper reporting, and data audit.
+- `agent/runtime.py`: Runtime guard with API/token limits, repeated-prompt detection, and consecutive error/blocked circuit breaker.
+- `agent/memory.py`: Memory persistence with sanitization, file-level compact, and CORRUPT/error preservation.
+- `agent/env.py`: Runtime environment detection (platform, hostname, CUDA, local/remote guess).
+- `agent/paths.py`: Run discovery helper for recent experiment directories.
+- `agent/cleanup.py`: Safe cleanup of old report directories.
+- `agent/safety.py`: Command blocking, confirmation gates, safe-command whitelists.
 
 ## Scripts
 
@@ -32,7 +34,8 @@
 - `scripts/run.py`: potential, sweep, external benchmark, and ablation workflows.
 - `scripts/audit.py`: clean audit, naming audit, config integrity.
 - `scripts/probe.py`: smoke, overfit, and small sanity probes.
-- `scripts/llm.py`: CLI and interactive shell for the optional LLM analysis agent. Supports /runs, /memory compact, agent_audit safety checks. Includes inspect, trace, compare, case, doctor, target tuning, and confirmation-gated training.
+- `scripts/llm.py`: Compatibility wrapper for the Agent CLI.
+- `scripts/extract_rnafm_embeddings.py`: Offline sequence-level RNA-FM embedding extractor; supports dummy embeddings for smoke tests.
 - `scripts/download_datasets.py`: Download RNA structure datasets to `dataset/raw/`. Standard library only, no credentials.
 - `scripts/upload_datasets.py`: SFTP upload of raw datasets to remote server. Default dry-run, password prompted at terminal, never hardcoded.
 - `scripts/make_trial_config.py`: Generate temporary trial configs from base YAML without modifying originals.

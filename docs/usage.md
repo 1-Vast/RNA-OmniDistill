@@ -128,6 +128,26 @@ Options:
 
 The optional LLM analysis agent is an experiment assistant, not a structure predictor. It reads existing artifacts and writes reports. In dry-run mode it only prints planned commands without calling any API.
 
+## RNA-FM Frozen Teacher Distillation
+
+RNA-FM is an optional frozen representation teacher. It provides sequence-level mean-pooled embeddings for self-supervised pretraining only. It does not generate structures, pseudo pairs, labels, predictions, benchmark metrics, or inference outputs.
+
+Generate smoke-test dummy embeddings:
+
+```bash
+python scripts/extract_rnafm_embeddings.py --input dataset/archive/train.jsonl --output_jsonl dataset/unlabeled/train_seq_rnafm.jsonl --output_npy dataset/teacher_emb/rnafm/train_embeddings.npy --dummy --limit 256 --embedding_dim 640 --overwrite
+python scripts/extract_rnafm_embeddings.py --input dataset/archive/val.jsonl --output_jsonl dataset/unlabeled/val_seq_rnafm.jsonl --output_npy dataset/teacher_emb/rnafm/val_embeddings.npy --dummy --limit 64 --embedding_dim 640 --overwrite
+```
+
+Run the optional pretrain and encoder-only fine-tune path:
+
+```bash
+python main.py train --config config/seq_pretrain_rnafm.yaml --device cuda --max_steps 20
+python main.py train --config config/candidate_from_rnafm_pretrain.yaml --device cuda --max_steps 20
+```
+
+Generated `.npy` embeddings and checkpoints are ignored by git.
+
 ### Start the Agent Shell
 ```bash
 python scripts/llm.py agent --dry_run

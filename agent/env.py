@@ -1,4 +1,4 @@
-"""Runtime environment detection for Agent context awareness.
+﻿"""Runtime environment detection for Agent context awareness.
 
 Detects platform, hostname, working directory, and CUDA availability
 to guide the Agent's training/location suggestions.

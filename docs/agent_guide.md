@@ -25,7 +25,7 @@ python agent.py
 # Linux / macOS
 python agent.py
 # or
-bash agent
+bash agent.sh
 
 # Original entry point
 python scripts/llm.py agent --dry_run

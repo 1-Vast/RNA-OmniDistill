@@ -1,0 +1,67 @@
+data:
+  train_jsonl: dataset/unlabeled/train_seq_rnafm.jsonl
+  val_jsonl: dataset/unlabeled/val_seq_rnafm.jsonl
+  allow_unlabeled: true
+  max_length: 512
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  length_grouping: true
+  length_bucket_size: 50
+
+tasks:
+  seq_denoise: 1.0
+
+model:
+  hidden_size: 512
+  num_layers: 8
+  num_heads: 8
+  dropout: 0.1
+  max_position_embeddings: 2048
+  pairhead: mlp
+  pairhidden: 512
+  pairdrop: 0.1
+  distbias: false
+  pairrefine: false
+  use_distill_head: true
+  teacher_dim: 640
+  distill_pool: mean
+  invalidlogit: -20.0
+
+training:
+  batch_size: 64
+  epochs: 3
+  lr: 0.0001
+  weight_decay: 0.01
+  warmup_steps: 200
+  lambda_seq: 1.0
+  lambda_struct: 0.0
+  lambda_pair: 0.0
+  lambda_distill: 0.05
+  pair_negative_ratio: 0
+  pair_positive_weight: 1.0
+  grad_clip: 1.0
+  amp: true
+  seed: 42
+  output_dir: outputs/seq_pretrain_rnafm
+  save_best_by: val_loss
+  early_stopping_patience: 3
+  min_delta: 0.0001
+  log_every: 20
+  train_decode_structures: false
+  val_decode_samples: 0
+  val_max_batches: 4
+
+decoding:
+  use_nussinov: false
+  decode_source: token
+
+ablation:
+  use_pair_head: false
+  use_pair_loss: false
+  use_nussinov: false
+  use_pair_aware_masking: false
+  use_motif_span_masking: false
+  use_motif_condition: false
+  use_family_condition: false

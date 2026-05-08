@@ -16,10 +16,12 @@ class RNAOmniDataset:
         jsonl_path: str | Path,
         max_length: int | None = None,
         strict: bool = False,
+        allow_unlabeled: bool = False,
     ) -> None:
         self.path = Path(jsonl_path)
         self.max_length = max_length
         self.strict = strict
+        self.allow_unlabeled = allow_unlabeled
         if not self.path.exists():
             raise FileNotFoundError(f"RNA JSONL file does not exist: {self.path}")
         self.samples = self._load()
@@ -56,12 +58,15 @@ class RNAOmniDataset:
         return samples
 
     def _normalize(self, raw: Dict[str, Any], line_no: int) -> Dict[str, Any]:
-        if "seq" not in raw or "struct" not in raw:
-            raise ValueError(f"{self.path}:{line_no} must contain both 'seq' and 'struct'.")
+        if "seq" not in raw and "sequence" not in raw:
+            raise ValueError(f"{self.path}:{line_no} must contain 'seq' or 'sequence'.")
+        if "struct" not in raw and not self.allow_unlabeled:
+            raise ValueError(f"{self.path}:{line_no} must contain 'struct' unless allow_unlabeled=True.")
 
-        seq = str(raw["seq"]).upper().replace("T", "U")
+        seq = str(raw.get("seq", raw.get("sequence"))).upper().replace("T", "U")
         seq = "".join(base if base in {"A", "U", "G", "C", "N"} else "N" for base in seq)
-        struct = str(raw["struct"])
+        is_labeled = "struct" in raw and raw.get("struct") is not None
+        struct = str(raw["struct"]) if is_labeled else "." * len(seq)
         struct = "".join(char if char in ALLOWED_STRUCT_CHARS else "." for char in struct)
 
         if len(seq) != len(struct):
@@ -91,7 +96,7 @@ class RNAOmniDataset:
         else:
             motifs = self._normalize_motifs(motifs, len(seq), line_no)
 
-        return {
+        sample = {
             "id": str(raw.get("id", f"{self.path.stem}_{line_no:06d}")),
             "seq": seq,
             "struct": struct,
@@ -99,7 +104,19 @@ class RNAOmniDataset:
             "motifs": motifs,
             "pairs": pairs,
             "length": len(seq),
+            "is_labeled": bool(is_labeled),
         }
+        for key in (
+            "teacher_embedding",
+            "teacher_embedding_file",
+            "teacher_embedding_index",
+            "teacher_embedding_dim",
+        ):
+            if key in raw and raw[key] is not None:
+                sample[key] = raw[key]
+        if raw.get("teacher_embedding"):
+            sample["teacher_embedding"] = str(raw["teacher_embedding"])
+        return sample
 
     def _normalize_pairs(
         self,

@@ -5,10 +5,15 @@ __pycache__/
 .ruff_cache/
 
 outputs/
+checkpoints/
 *.pt
 *.pth
 *.ckpt
+*.npy
+*.safetensors
 dataset/archive/
+dataset/unlabeled/
+dataset/teacher_emb/
 dataset/raw/*
 !dataset/raw/.gitkeep
 dataset/processed_archiveii/
@@ -22,6 +27,8 @@ dataset/processed/rfam/
 dataset/processed/crw_trna/
 
 .env
+external/rnafm/checkpoints/
+external/RNA-FM/checkpoints/
 .venv/
 venv/
 .vscode/

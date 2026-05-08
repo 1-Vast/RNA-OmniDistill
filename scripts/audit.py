@@ -65,7 +65,6 @@ OLD_PATTERNS = [
     "run_potential_suite",
     "run_benchmark",
     "prepare_rna_dataset",
-    "check_dataset",
     "make_splits",
     "run_realdata_smoke",
     "export_predictions",
@@ -496,12 +495,18 @@ def run_clean(args: argparse.Namespace) -> None:
         warnings.append("dataset data directory is missing")
     if not Path("scripts/data.py").exists():
         warnings.append("scripts/data.py is missing")
-    if not Path("models/agent/__init__.py").exists():
-        warnings.append("models/agent package is missing")
+    if not Path("agent/__init__.py").exists():
+        warnings.append("agent package is missing")
 
     llm_script = Path("scripts/llm.py")
-    analyzer = Path("models/agent/analyzer.py")
-    llm_text = llm_script.read_text(encoding="utf-8", errors="replace") if llm_script.exists() else ""
+    agent_cli = Path("agent/cli.py")
+    analyzer = Path("agent/analyzer.py")
+    agent_sources = [agent_cli, Path("agent/cleanup.py"), Path("agent/safety.py")]
+    llm_text = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in agent_sources
+        if path.exists()
+    )
     analyzer_text = analyzer.read_text(encoding="utf-8", errors="replace") if analyzer.exists() else ""
 
     def config_text(path: str) -> str:
@@ -557,7 +562,7 @@ def run_clean(args: argparse.Namespace) -> None:
         "top_level_data_package_exists": top_data.exists(),
         "dataset_dir_exists": Path("dataset").exists(),
         "scripts_data_cli_exists": Path("scripts/data.py").exists(),
-        "agent_files": sorted(str(path) for path in Path("models/agent").rglob("*.py")) if Path("models/agent").exists() else [],
+        "agent_files": sorted(str(path) for path in Path("agent").rglob("*.py")) if Path("agent").exists() else [],
         "tracked_blocked_files": tracked_blocked,
         "warnings": warnings,
         "recommended_next_command": "conda run -n DL python scripts\\run.py ablate --config config/fixed.yaml --only full nopair nonuss random --device cuda --decode nussinov --bench_workers 8 --bench_profile --bench_resume",
