@@ -1,2 +1,0 @@
-{"id": "toy_0003", "seq": "AUGCAU", "struct": "(....)", "family": "tRNA", "motifs": [{"type": "HAIRPIN", "start": 1, "end": 4}]}
-{"id": "toy_0004", "seq": "GCUAAGC", "struct": "((...))", "family": "miRNA"}
