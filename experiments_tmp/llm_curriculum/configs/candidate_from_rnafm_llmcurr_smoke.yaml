@@ -1,0 +1,80 @@
+# Smoke config for curriculum fine-tuning.
+# DO NOT use as default. Temporary experiment only.
+# Based on: config/candidate_from_rnafm_pretrain.yaml
+
+data:
+  train_jsonl: dataset/archive/train.jsonl
+  val_jsonl: dataset/archive/val.jsonl
+  test_jsonl: dataset/archive/test.jsonl
+  use_curriculum_policy: false
+  max_length: 512
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  length_grouping: true
+  length_bucket_size: 50
+
+tasks:
+  seq2struct: 0.35
+  invfold: 0.25
+  inpaint: 0.25
+  motif_control: 0.15
+
+model:
+  hidden_size: 512
+  num_layers: 8
+  num_heads: 8
+  dropout: 0.1
+  max_position_embeddings: 2048
+  distbias: true
+  pairrefine: true
+
+training:
+  batch_size: 24
+  epochs: 1
+  lr: 0.0001
+  weight_decay: 0.01
+  warmup_steps: 10
+  lambda_pair: 5.0
+  lambda_struct: 1.0
+  lambda_seq: 1.0
+  pair_negative_ratio: 5
+  pair_positive_weight: 10.0
+  structure_positive_weight: 1.0
+  grad_clip: 1.0
+  amp: true
+  seed: 42
+  output_dir: experiments_tmp/llm_curriculum/outputs/candidate_from_rnafm_smoke
+  init_from_pretrain: experiments_tmp/llm_curriculum/outputs/seq_pretrain_smoke/best.pt
+  load_encoder_only: true
+  save_best_by: val_loss
+  early_stopping_patience: 10
+  min_delta: 0.0001
+  log_every: 5
+  train_decode_structures: false
+  val_decode_samples: 8
+  val_max_batches: 2
+
+decoding:
+  num_steps: 4
+  min_loop_length: 3
+  use_nussinov: true
+  allow_wobble: true
+  decode_source: pair
+  pair_threshold: 0.25
+  nussinov_gamma: 2.0
+  topk_pairs: 20
+
+ablation:
+  use_pair_head: true
+  use_pair_loss: true
+  use_nussinov: true
+  use_curriculum_policy: false
+
+baselines:
+  run_all_dot: true
+  run_random_pair: true
+
+debug:
+  check_pair_batch: false
