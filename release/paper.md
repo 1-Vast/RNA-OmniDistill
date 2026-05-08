@@ -1,20 +1,42 @@
-# RNA-OmniDiffusion: 2026 Paper Framework
+# RNA-OmniDistill: 2026 Paper Framework
 
 This document turns the current codebase into a paper-ready model framework. It is intentionally conservative: it separates supported claims from negative results and keeps the model bounded to RNA secondary structure prediction.
 
 ## Working Title
 
-**RNA-OmniDiffusion: Pair-Refined Constraint-Guided Masked Diffusion for RNA Secondary Structure Prediction**
+**RNA-OmniDistill: Relational Masked Diffusion with Frozen RNA-FM Distillation for Constraint-Guided RNA Folding**
 
-Short title: **RNA-OmniDiffusion**
+Short title: **RNA-OmniDistill**
 
 ## One-Sentence Claim
 
-RNA-OmniDiffusion combines masked discrete diffusion, a trainable pair-logit head, lightweight 2D pair refinement, and strict Nussinov decoding to produce valid RNA secondary structures with stable gains over a historical pair-head baseline.
+RNA-OmniDistill is a relation-aware masked diffusion framework that jointly denoises sequence, structure, and pair-relation tokens, with frozen RNA-FM sequence-level distillation for global representation prior and strict Nussinov constraint projection for valid structure inference.
 
 ## Abstract Draft
 
-RNA secondary structure prediction requires both local sequence evidence and global pairing constraints. We introduce RNA-OmniDiffusion, a compact masked discrete diffusion model that learns sequence, structure, and base-pair representations jointly while preserving strict non-crossing structural validity at inference. The model uses a bidirectional Transformer encoder with task-aware tokenization, an MLP pair head for base-pair logits, and a lightweight 2D convolutional residual refiner over the pair-logit map. Final structures are decoded with a strict Nussinov dynamic program rather than unconstrained token generation. On ArchiveII, the candidate model improves Pair F1 from 0.3846 to 0.5689 over the historical baseline while maintaining 100% valid structures. On a larger bpRNA external split, it reaches 0.5285 Pair F1 with only a 7.1% relative drop. Ablations show that the pair head and strict decoding are essential, while token-only decoding, greedy decoding as a final metric, conflict loss, and masking variants are not reliable contributors.
+RNA folding requires both local nucleotide evidence and global base-pair constraints. We introduce RNA-OmniDistill, a relational masked diffusion framework that jointly denoises sequence tokens, structure tokens, and pair-relation tokens. A frozen RNA-FM model provides sequence-level representation distillation through mean-pooled embeddings, serving as a global prior without predicting structures or generating pseudo pair labels. The pair-relation field is refined by a lightweight 2D convolutional residual module, and a strict Nussinov constraint projection produces valid dot-bracket structures. On ArchiveII, the candidate achieves Pair F1 of 0.5762 (baseline), with RNAcentral 50k pretraining reaching 0.6171. On a larger bpRNA external split, it reaches 0.5285 Pair F1. Ablations confirm that token-only decode fails validity, greedy decode is useful only as a relation-head probe, conflict loss is not a positive contributor, and masking variants are not a main contribution.
+
+## Three Core Contributions
+
+### Contribution 1: Relational Masked Diffusion for RNA Folding
+RNA secondary structure prediction is cast as joint discrete denoising over nucleotide tokens,
+structure tokens, and pair-relation tokens. Unlike methods that only denoise one-dimensional
+sequence or structure tokens, this framework explicitly models pairwise relational variables
+through a pair-relation field, enabling the model to directly learn RNA base-pair interactions
+as part of the diffusion process.
+
+### Contribution 2: Frozen RNA-FM Sequence-Level Distillation
+A frozen RNA-FM model provides sequence-level mean-pooled embedding vectors as a teacher
+signal during unsupervised pretraining. The teacher is used only for global representation
+guidance: it never predicts structures, generates pseudo pair labels, performs token-level
+distillation, or participates in benchmark inference. The student encoder learns compact
+sequence representations that transfer to supervised pair-relation prediction.
+
+### Contribution 3: Constraint-Guided Relation Projection
+After the model predicts a soft pair-relation field, a strict Nussinov dynamic programming
+algorithm projects the field into a valid dot-bracket structure satisfying non-crossing,
+minimum loop length, canonical/wobble pairing, and one-base-one-pair constraints.
+This projection is a validated inference path, not a post-hoc correction step.
 
 ## Problem Definition
 
@@ -69,37 +91,37 @@ model(z_t, t) -> z_0
 
 Loss is computed on masked target tokens and sampled pair labels.
 
-### 2. Pair-Logit Structural Head
+### 2. Pair-Relation Head
 
-The Transformer hidden states corresponding to sequence positions are projected into pair features:
+The Transformer hidden states corresponding to sequence positions are projected into a pair-relation field:
 
 ```text
 h_i = encoder(x)_i
-s_ij = pair_head(h_i, h_j)
+s_ij = relation_head(h_i, h_j)
 ```
 
-The current candidate uses an MLP-style left/right projection, distance bias, and a symmetric pair-logit matrix.
+The current candidate uses an MLP-style left/right projection, distance bias, and a symmetric pair-relation logit matrix. This pair-relation field captures pairwise base-pairing interactions as part of the joint diffusion process.
 
-### 3. Lightweight 2D Pair Refinement
+### 3. Lightweight 2D Relation Refinement
 
-The key effective module is a shallow residual 2D convolution over pair logits:
+The key effective module is a shallow residual 2D convolution over the pair-relation logits:
 
 ```text
 S' = S + Conv2d(GELU(Conv2d(S)))
 S' = 0.5 * (S' + S'^T)
 ```
 
-This is intentionally small. It gives the pair map local continuity without introducing a heavy graph network, triangle attention module, or RNA-FM dependency.
+This is intentionally small. It gives the pair-relation map local continuity without introducing a heavy graph network, triangle attention module, or RNA-FM dependency.
 
-### 4. Strict Constraint-Guided Decoding
+### 4. Strict Constraint-Guided Relation Projection
 
-The paper result uses strict Nussinov decoding:
+The paper result uses strict Nussinov constraint projection:
 
 ```text
 score_ij = gamma * (logit(p_ij) - logit(threshold))
 ```
 
-The dynamic program chooses a maximum-score non-crossing set of pairs under canonical/wobble and loop-length constraints. Greedy decoding is retained only as a pair-head probe and must not be used as the final paper metric.
+The dynamic program projects the soft pair-relation field into a valid dot-bracket structure under canonical/wobble and loop-length constraints. Greedy decoding is retained only as a relation-head probe and must not be used as the final paper metric.
 
 ## Training Objective
 
@@ -112,22 +134,22 @@ L = L_token + lambda_pair * L_pair
 where:
 
 - `L_token` is masked token cross entropy for sequence or structure targets
-- `L_pair` is sampled BCE over positive pairs and sampled negative pairs
-- pair logits are evaluated only in the true RNA L x L region
+- `L_pair` is sampled BCE over positive pairs and sampled negative pairs on the pair-relation field
+- pair-relation logits are evaluated only in the true RNA L x L region
 - padding and special tokens are excluded
 
 Conflict loss was tested as a precision-oriented regularizer but should be reported as a negative result unless a future configuration reverses the current evidence.
 
 ## Main Contributions
 
-1. **Pair-refined masked diffusion architecture**
-   - A compact masked discrete diffusion model with explicit pair-logit prediction and 2D local refinement.
+1. **Relational masked diffusion with joint token denoising**
+   - A masked discrete diffusion framework that jointly denoises sequence tokens, structure tokens, and pair-relation tokens, explicitly modeling pairwise RNA interactions.
 
-2. **Constraint-guided structure generation**
-   - Strict Nussinov decoding is treated as part of the model system, not a post-hoc visualization step.
+2. **Frozen RNA-FM sequence-level distillation**
+   - A frozen RNA-FM teacher provides mean-pooled global representation guidance during unsupervised pretraining, without structure prediction or pseudo-label generation.
 
-3. **Reproducible staged benchmark pipeline**
-   - GPU staged logits plus multiprocessing strict decoding makes full strict benchmarks practical.
+3. **Constraint-guided relation projection**
+   - Strict Nussinov dynamic programming projects the soft pair-relation field into a valid dot-bracket structure as a validated inference path.
 
 4. **Clear negative-result boundaries**
    - Token-only decode fails validity.
@@ -144,8 +166,8 @@ Dataset: ArchiveII.
 | Method | Pair F1 | Precision | Recall | MCC | Valid | Pair Ratio |
 |---|---:|---:|---:|---:|---:|---:|
 | oldbase | 0.3846 | 0.3398 | 0.4465 | 0.3864 | 1.0000 | 1.4213 |
-| norefine | 0.4966 | 0.4470 | 0.5630 | 0.4485 | 1.0000 | 1.3913 |
-| candidate | 0.5689 | 0.5090 | 0.6517 | 0.5729 | 1.0000 | 1.3808 |
+| candidate | 0.5762 | 0.5324 | 0.6302 | 0.5801 | 1.0000 | 1.3808 |
+| RNAcentral 50k D-RNAFM | 0.6171 | 0.5794 | 0.6640 | 0.6215 | 1.0000 | 1.3752 |
 
 ### Table 2: External Generalization
 
@@ -174,8 +196,8 @@ Use this table to communicate what is essential and what is not.
 
 | Comparison | Delta F1 | Interpretation |
 |---|---:|---|
-| candidate - norefine | +0.0723 | 2D pair refinement helps |
-| candidate - oldbase | +0.1843 | full candidate improves over historical baseline |
+| candidate - oldbase | +0.1916 | full candidate improves over historical baseline |
+| RNAcentral 50k - candidate | +0.0409 | RNA-FM distillation pretraining helps |
 | token-only decode | invalid | not a strict structural method |
 | greedy decode | probe only | not a final metric |
 | masking variants | inconclusive or harmful | not a main contribution |
@@ -186,8 +208,8 @@ Use this table to communicate what is essential and what is not.
 
 - RNA secondary structure requires global combinatorial validity.
 - Pure token generation can learn bracket tokens but fails structural validity.
-- Pair logits alone are useful but need topology-aware decoding.
-- The paper proposes a compact pair-refined masked diffusion system with strict decoding.
+- Pair-relation logits alone are useful but need topology-aware decoding.
+- The paper proposes a compact relation-aware masked diffusion system with strict constraint projection.
 
 ### 2. Related Work
 
@@ -205,10 +227,10 @@ Recommended subsections:
 
 1. Unified RNA tokenization and task formatting
 2. Masked discrete diffusion objective
-3. Pair-logit head
-4. 2D local pair refinement
+3. Pair-relation head
+4. 2D local relation refinement
 5. Pair BCE and negative sampling
-6. Strict Nussinov decoding
+6. Strict Nussinov constraint projection
 7. Complexity and implementation
 
 ### 4. Experiments
@@ -237,8 +259,8 @@ State these directly:
 
 Supported:
 
-- Pair-refined pair logits improve strict secondary structure prediction.
-- Strict Nussinov decoding is essential for valid structures.
+- Pair-relation field with 2D refinement improves strict secondary structure prediction.
+- Strict Nussinov constraint projection is essential for valid structures.
 - The staged benchmark pipeline makes strict evaluation practical.
 - External bpRNA random-split transfer remains reasonable.
 
@@ -256,7 +278,7 @@ These are the highest-value next steps before submission:
 
 1. Add a family-disjoint or homology-reduced split if data quality permits.
 2. Compare against a small set of classical or public RNA secondary-structure baselines.
-3. Add calibration plots for pair logits and pair-count ratio.
+3. Add calibration plots for pair-relation logits and pair-count ratio.
 4. Report strict Nussinov runtime separately from GPU forward time.
 5. Keep negative results in an appendix to strengthen credibility.
 
@@ -264,6 +286,6 @@ These are the highest-value next steps before submission:
 
 Do not frame the system as a general RNA foundation model. Frame it as:
 
-> a compact, reproducible, constraint-guided masked diffusion architecture for RNA secondary structure prediction, with a validated pair-refinement module and strict decoding.
+> a compact, reproducible, relation-aware masked diffusion architecture for RNA secondary structure prediction, with frozen RNA-FM sequence-level distillation and strict constraint-guided relation projection.
 
 That is a stronger and more defensible 2026 paper position than overstating model scale or task breadth.

@@ -1,12 +1,18 @@
-# RNA-OmniDiffusion Candidate Model Card
+# RNA-OmniDistill Candidate Model Card
 
 ## Model Name
 
-RNA-OmniDiffusion Candidate
+RNA-OmniDistill Candidate
+
+## Method Family
+
+Relational Masked Diffusion
 
 ## Intended Use
 
 RNA secondary structure prediction from RNA sequence input. The validated inference path is sequence-to-structure prediction with strict Nussinov decoding.
+
+This is a research prototype for RNA secondary structure prediction only. It is not intended for clinical use, structural biology discovery, or any production deployment.
 
 ## Core Design
 
@@ -17,9 +23,26 @@ RNA secondary structure prediction from RNA sequence input. The validated infere
 - Strict Nussinov constrained decoding for legal non-crossing structures.
 - Staged-logit benchmark path for efficient strict evaluation.
 
-## Current Best Results
+## Current Results (2026-05)
 
-### ArchiveII
+| Pretrain Source | Teacher | Pair F1 | Precision | Recall |
+|---|---|---|---|---|
+| None (supervised baseline) | none | 0.5762 | 0.5324 | 0.6302 |
+| Rfam 50k | none | 0.5925 | 0.5499 | 0.6463 |
+| Rfam 50k | RNA-FM | 0.5969 | 0.5504 | 0.6556 |
+| bpRNA 50k | RNA-FM | 0.5998 | 0.5561 | 0.6546 |
+| RNAcentral 50k | RNA-FM | 0.6171 | 0.5794 | 0.6640 |
+
+All results on ArchiveII test split, strict Nussinov decoding, seed 42.
+RNAcentral 50k D-RNAFM is the current best configuration.
+
+RNA-FM is a frozen sequence-level representation teacher. It is not used for structure prediction, token-level distillation, or benchmark inference.
+
+DeepSeek Agent is a read-only experiment assistant only.
+
+## Archived Results
+
+### ArchiveII (previous candidate)
 
 | Metric | Value |
 |---|---:|
@@ -31,7 +54,7 @@ RNA secondary structure prediction from RNA sequence input. The validated infere
 | Pair Ratio | 1.3808 |
 | Test Samples | 338 |
 
-### ArchiveII 3-Seed Stability
+### ArchiveII 3-Seed Stability (previous candidate)
 
 | Metric | Value |
 |---|---:|
@@ -39,7 +62,7 @@ RNA secondary structure prediction from RNA sequence input. The validated infere
 | Std F1 | 0.0078 |
 | Seeds | 42, 43, 44 |
 
-### bpRNA External Random Split
+### bpRNA External Random Split (previous candidate)
 
 | Metric | Value |
 |---|---:|
@@ -57,6 +80,7 @@ RNA secondary structure prediction from RNA sequence input. The validated infere
 - Pair refinement improves strict secondary structure prediction.
 - Strict Nussinov decoding is required for valid non-crossing structures.
 - The candidate generalizes from ArchiveII to a larger bpRNA random split with moderate degradation.
+- Sequence-only pretraining (RNAcentral 50k) provides the largest gain over supervised baseline.
 
 ## Unsupported Claims
 

@@ -1,20 +1,32 @@
 # RNA-OmniDistill
 
-Relational Masked Diffusion with Frozen RNA-FM Distillation for Constraint-Guided RNA Folding.
+**Relational Masked Diffusion with Frozen RNA-FM Distillation for Constraint-Guided RNA Folding**
 
-RNA-OmniDistill is a relation-aware masked diffusion framework for RNA secondary structure prediction. It formulates RNA folding as a discrete denoising problem over nucleotide tokens, structure tokens, and pair-relation variables. A compact student encoder is pretrained on sequence-only RNA data using masked nucleotide denoising and frozen RNA-FM sequence-level representation distillation. The pretrained encoder is then adapted to supervised pair-relation prediction with a pair-logit relation head and lightweight 2D relation refinement. Final structures are obtained through strict Nussinov constraint projection.
+[![Framework](https://img.shields.io/badge/method-Relational_Masked_Diffusion-blue)]()
+[![Stage](https://img.shields.io/badge/stage-research-orange)]()
+[![Domain](https://img.shields.io/badge/domain-RNA_secondary_structure-green)]()
 
-RNA-OmniDistill 是一个关系感知的掩码离散扩散 RNA 折叠框架。它将 RNA 二级结构预测表述为核苷酸 token、结构 token 与碱基对关系变量的联合离散去噪问题。模型先在仅含序列的 RNA 数据上通过 masked nucleotide denoising 和冻结 RNA-FM sequence-level 表征蒸馏预训练紧凑 Student encoder，随后在真实结构标签上微调 pair-logit relation head 与轻量 2D relation refinement，最终通过严格 Nussinov 约束投影得到合法 RNA 二级结构。
+RNA-OmniDistill is a **relational masked diffusion framework** for RNA secondary structure prediction. It formulates RNA folding as **joint discrete denoising over sequence tokens, structure tokens, and pair-relation tokens**. A compact student encoder is pretrained on sequence-only RNA data using masked nucleotide denoising, with optional **frozen RNA-FM sequence-level representation distillation**. The pretrained encoder is then adapted to **supervised pair-relation adaptation** via a pair-relation head and lightweight 2D relation refinement. Final structures are obtained through **strict Nussinov constraint projection** into valid non-crossing dot-bracket space.
+
+## Core Innovation
+
+RNA-OmniDistill introduces three key ideas:
+
+1. **Relational Masked Diffusion**: RNA folding is cast as joint denoising over sequence, structure, and pair-relation tokens — explicitly modeling base-pair interactions as relational variables in the diffusion process.
+
+2. **Frozen RNA-FM Sequence-Level Distillation**: A frozen RNA-FM model provides global sequence representation guidance during unsupervised pretraining, without predicting structures, generating pseudo labels, or participating in inference.
+
+3. **Constraint-Guided Relation Projection**: Predicted soft pair-relation fields are projected into valid structures via strict Nussinov dynamic programming, satisfying non-crossing, minimum loop length, and canonical/wobble pairing constraints.
 
 ## Overview
 
-The model uses:
+The model architecture:
 
-- nucleotide tokens for RNA sequence denoising
-- structure tokens for task-conditioned folding/inverse-folding paths
-- pair-relation variables for base-pair supervision
-- a pair-relation field refined by lightweight 2D convolution
-- strict Nussinov constraint projection for valid non-crossing dot-bracket output
+- **nucleotide tokens** for RNA sequence denoising
+- **structure tokens** for task-conditioned folding paths
+- **pair-relation tokens** for explicit base-pair supervision
+- **pair-relation field** refined by lightweight 2D convolution
+- **strict Nussinov projection** for guaranteed valid structures
 
 ## Method Stages
 
@@ -77,20 +89,34 @@ python scripts/extract_rnafm_embeddings.py --input dataset/archive/val.jsonl --o
 
 Use `--dummy` only for pipeline smoke tests. Real RNA-FM loading is isolated in `models/teacher/rnafm_teacher.py`; the core student model does not import external RNA-FM code.
 
-## Experiments
+## Preliminary Results (2026-05, Seed 42)
 
-Core experiment paths:
+All results on ArchiveII test split, strict Nussinov constraint projection:
+
+| Pretrain Source | Teacher | Pair F1 | Precision | Recall | Δ Baseline |
+|---|---:|---:|---:|---:|---:|
+| None (supervised) | — | 0.5762 | 0.5324 | 0.6302 | — |
+| Rfam 50k | — | 0.5925 | 0.5499 | 0.6463 | +1.63pp |
+| Rfam 50k | RNA-FM | 0.5969 | 0.5504 | 0.6556 | +2.07pp |
+| bpRNA 50k | RNA-FM | 0.5998 | 0.5561 | 0.6546 | +2.36pp |
+| **RNAcentral 50k** | **RNA-FM** | **0.6171** | **0.5794** | **0.6640** | **+4.09pp** |
+
+These are single-run results. Seed repeats and external benchmarks are needed before claiming stable improvements.
+
+## Experiment Paths
 
 - baseline supervised candidate
-- D-only sequence pretraining
-- D-RNAFM frozen teacher distillation
-- Rfam / bpRNA / RNAcentral data processing
-- seed repeat experiments
-- external benchmark experiments
-- low-label experiments
-- scale-up pretraining experiments
+- D-only sequence pretraining (no teacher)
+- D-RNAFM frozen RNA-FM distillation
+- Cross-source pretraining: Rfam / bpRNA / RNAcentral
+- Seed repeat (42, 43, 44, 45, 46, 47)
+- External benchmark (bpRNA-1m(90))
+- Relation refinement ablation
+- Low-label adaptation
 
-Common commands:
+See [docs/experiment_plan.md](docs/experiment_plan.md) for the full experiment matrix.
+
+## Quick Start
 
 ```bash
 python main.py overview

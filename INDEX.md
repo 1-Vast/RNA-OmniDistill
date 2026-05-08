@@ -13,6 +13,10 @@
 - `scripts/data.py`: data preparation, FASTA/JSONL conversion, split, and validation CLI.
 - `scripts/eval.py`: benchmark, export, analysis, diagnosis, and decoding scan CLI.
 - `scripts/run.py`: experiment orchestration for sweeps, external benchmarks, ablations, and summaries.
+- `scripts/experiments.py`: experiment manager (plan, make_configs, summarize, export_table).
+- `scripts/process_all_data.py`: one-shot bpRNA + RNAcentral data processing.
+- `scripts/make_experiment_configs.py`: parameterized experiment config generator.
+- `scripts/run_experiment_matrix.sh`: server-side experiment runner template.
 
 ## Configs
 
@@ -24,8 +28,9 @@
 
 ## Docs
 
-- `docs/rna_omnidistill.md`: main method document.
-- `docs/dataset_processing_and_splits.md`: Rfam, bpRNA, RNAcentral, and processed split notes.
+- `docs/rna_omnidistill.md`: main method formulation and framework architecture.
+- `docs/dataset_processing_and_splits.md`: Rfam, bpRNA, RNAcentral data pipeline and split documentation.
+- `docs/experiment_plan.md`: reproducibility, ablation, external benchmark, and calibration experiment matrix.
 - `docs/usage.md`: local CLI usage for training, evaluation, inference, data processing, and audits.
 
 ## Mainline Commands
