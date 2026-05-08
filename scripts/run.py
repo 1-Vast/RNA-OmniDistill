@@ -1025,6 +1025,13 @@ def main() -> None:
     semantic_cmd.add_argument("--tag", default="semantic")
     semantic_cmd.add_argument("--quick", action="store_true")
     semantic_cmd.set_defaults(func=run_semantic_wf)
+
+    # --- summarize ---
+    summarize_cmd = sub.add_parser("summarize", help="Compare multiple run outputs in a summary table")
+    summarize_cmd.add_argument("--runs", nargs="+", required=True, help="Paths to run directories")
+    summarize_cmd.add_argument("--out", required=True, help="Output base path (without extension)")
+    summarize_cmd.set_defaults(func=run_summarize)
+
     args = parser.parse_args()
     args.func(args)
 
@@ -1110,6 +1117,148 @@ def run_semantic_wf(args):
     print(f"  Dataset: {args.dataset}")
     print(f"  Quick: {args.quick}")
     print("  Quick mode: semantic audit only")
+
+
+def run_summarize(args: argparse.Namespace) -> None:
+    """Compare multiple run outputs in a summary table."""
+    run_dirs = [Path(r) for r in args.runs]
+    out_base = Path(args.out)
+    out_path = out_base.with_suffix("")
+
+    rows = []
+    for run_dir in run_dirs:
+        run_name = run_dir.name
+        benchmark_exists = (run_dir / "benchmark.json").exists()
+        trainlog_exists = (run_dir / "trainlog.jsonl").exists()
+
+        # --- benchmark ---
+        if benchmark_exists:
+            benchmark = read_json(run_dir / "benchmark.json")
+            model = benchmark.get("overall", {}).get("model", {})
+            pair_precision = as_float(model.get("pair_precision"))
+            pair_recall = as_float(model.get("pair_recall"))
+            pair_f1 = as_float(model.get("pair_f1"))
+            valid = as_float(model.get("valid_structure_rate"))
+            avg_pred = as_float(model.get("avg_pred_pair_count"))
+            avg_true = as_float(model.get("avg_true_pair_count"))
+            pair_ratio = avg_pred / max(1e-8, avg_true)
+            all_dot = as_float(model.get("all_dot_ratio"))
+            ckpt_path = str(run_dir / "best.pt") if (run_dir / "best.pt").exists() else ""
+        else:
+            pair_precision = pair_recall = pair_f1 = valid = all_dot = 0.0
+            avg_pred = avg_true = pair_ratio = 0.0
+            ckpt_path = ""
+
+        # --- trainlog ---
+        if trainlog_exists:
+            train_rows = read_jsonl(run_dir / "trainlog.jsonl")
+            last_row = train_rows[-1] if train_rows else {}
+            train_loss = as_float(last_row.get("train_loss"))
+            val_loss = as_float(last_row.get("val_loss"))
+            train_distill = as_float(last_row.get("train_distill_loss"))
+            val_distill = as_float(last_row.get("val_distill_loss"))
+            init_from_pretrain = str(last_row.get("init_from_pretrain", ""))
+            lambda_distill = as_float(last_row.get("lambda_distill"))
+        else:
+            train_loss = val_loss = train_distill = val_distill = 0.0
+            init_from_pretrain = ""
+            lambda_distill = 0.0
+            last_row = {}
+
+        # --- config for type detection ---
+        config_path = run_dir / "config_used.yaml"
+        if config_path.exists():
+            config = load_yaml(config_path)
+            train_config = config.get("training", {})
+            data_cfg = config.get("data", {})
+            config_init = str(train_config.get("init_from_pretrain", ""))
+            config_lambda = as_float(train_config.get("lambda_distill", 0.0))
+            config_train_jsonl = str(data_cfg.get("train_jsonl", ""))
+        else:
+            # fallback to jsonl metadata
+            config_init = init_from_pretrain
+            config_lambda = lambda_distill
+            config_train_jsonl = ""
+
+        # --- detect config type ---
+        has_pretrain = bool(config_init)
+        if not has_pretrain:
+            config_type = "supervised baseline"
+        elif "rfam" in config_train_jsonl.lower() and config_lambda == 0.0:
+            config_type = "D-only from Rfam"
+        elif "rnafm" in config_train_jsonl.lower() and config_lambda > 0.0:
+            config_type = "D-RNAFM from Rfam"
+        elif "rfam" in config_train_jsonl.lower():
+            config_type = "D-only from Rfam"
+        elif "rnafm" in config_train_jsonl.lower():
+            config_type = "D-RNAFM from Rfam"
+        else:
+            config_type = "supervised baseline"
+
+        # --- pretrain trainlog ---
+        pretrain_info = {}
+        if has_pretrain:
+            pretrain_dir = Path(config_init).parent
+            pretrain_log = read_jsonl(pretrain_dir / "trainlog.jsonl")
+            if pretrain_log:
+                best_val = min(as_float(r.get("val_loss", float("inf"))) for r in pretrain_log)
+                pt_last = pretrain_log[-1]
+                pretrain_info = {
+                    "pretrain_best_val_loss": best_val,
+                    "pretrain_train_distill_loss": as_float(pt_last.get("train_distill_loss")),
+                    "pretrain_val_distill_loss": as_float(pt_last.get("val_distill_loss")),
+                    "pretrain_teacher_mask_ratio": as_float(pt_last.get("teacher_mask_ratio")),
+                }
+
+        row = {
+            "run": run_name,
+            "type": config_type,
+            "pair_precision": pair_precision,
+            "pair_recall": pair_recall,
+            "pair_f1": pair_f1,
+            "valid_structure_rate": valid,
+            "pair_ratio": pair_ratio,
+            "all_dot_ratio": all_dot,
+            "avg_pred_pair_count": avg_pred,
+            "avg_true_pair_count": avg_true,
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "train_distill_loss": train_distill,
+            "val_distill_loss": val_distill,
+            "checkpoint_path": ckpt_path,
+            "config_path": str(config_path) if config_path.exists() else "",
+            "benchmark_found": benchmark_exists,
+            "trainlog_found": trainlog_exists,
+        }
+        row.update(pretrain_info)
+        rows.append(row)
+
+    # --- write outputs ---
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path = out_path.with_suffix(".json")
+    json_path.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+    md_path = out_path.with_suffix(".md")
+    lines = [
+        "| Run | Type | Pair Precision | Pair Recall | Pair F1 | Valid | Pair Ratio | All-Dot | Pred Pairs | True Pairs |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for row in rows:
+        if row["benchmark_found"]:
+            lines.append(
+                f"| {row['run']} | {row['type']} | "
+                f"{row['pair_precision']:.4f} | {row['pair_recall']:.4f} | {row['pair_f1']:.4f} | "
+                f"{row['valid_structure_rate']:.4f} | {row['pair_ratio']:.4f} | "
+                f"{row['all_dot_ratio']:.4f} | {row['avg_pred_pair_count']:.4f} | {row['avg_true_pair_count']:.4f} |"
+            )
+        else:
+            lines.append(
+                f"| {row['run']} | {row['type']} | no benchmark | no benchmark | no benchmark | "
+                f"no benchmark | no benchmark | no benchmark | no benchmark | no benchmark |"
+            )
+    md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    print(f"Summary written to {json_path} and {md_path}")
 
 
 if __name__ == "__main__":
