@@ -1,15 +1,15 @@
-# Stage 1: Sequence-only RNA-FM teacher-guided pretraining
-# RNA-OmniDistill framework
+# Stage 1 (D-only): Sequence-only MLM pretraining (no RNA-FM teacher)
+# RNA-OmniDistill ablation baseline
 # - Input: unlabeled RNA sequences (allow_unlabeled=true)
 # - Task: masked nucleotide denoising (seq_denoise=1.0)
-# - Teacher: frozen RNA-FM (sequence-level mean-pooled embedding only)
-# - No token-level distillation
-# - No pair prior
-# - No LLM semantic tokens
-# - Loss: L_pretrain = L_denoise + lambda_distill * L_distill
+# - No teacher distillation (lambda_distill=0.0)
+# - No pair head/loss/Nussinov during pretraining
+# - Loss: L_pretrain = L_denoise (no distillation term)
+# - Purpose: Isolate D-only MLM contribution vs D-RNAFM
+
 data:
-  train_jsonl: dataset/unlabeled/train_seq_rnafm.jsonl
-  val_jsonl: dataset/unlabeled/val_seq_rnafm.jsonl
+  train_jsonl: dataset/unlabeled/train_seq.jsonl
+  val_jsonl: dataset/unlabeled/val_seq.jsonl
   allow_unlabeled: true
   max_length: 512
   num_workers: 4
@@ -28,8 +28,9 @@ model:
   num_heads: 8
   dropout: 0.1
   max_position_embeddings: 2048
-  use_distill_head: true          # Sequence-level distillation head (mean-pooled)
-  teacher_dim: 640                # RNA-FM hidden size — sequence-level only
+  # No distillation head — D-only baseline
+  use_distill_head: false
+  teacher_dim: 640
   distill_pool: mean
 
 training:
@@ -41,11 +42,11 @@ training:
   lambda_seq: 1.0
   lambda_struct: 0.0
   lambda_pair: 0.0
-  lambda_distill: 0.05            # Sequence-level distillation loss weight
+  lambda_distill: 0.0  # No RNA-FM distillation
   grad_clip: 1.0
   amp: true
   seed: 42
-  output_dir: outputs/seq_pretrain_rnafm
+  output_dir: outputs/seq_pretrain
   save_best_by: val_loss
   early_stopping_patience: 3
   min_delta: 0.0001
@@ -59,7 +60,6 @@ decoding:
   decode_source: token
 
 ablation:
-  # During pretraining: no pair head, no pair loss, no Nussinov decoding
   use_pair_head: false
   use_pair_loss: false
   use_nussinov: false

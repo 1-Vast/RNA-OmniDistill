@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from models.teacher.rnafm_teacher import RNAFMTeacher
+# This extractor writes sequence-level embeddings only. RNA-FM is never used for structure prediction or pseudo-label generation.
 
 
 def read_rows(path: Path) -> list[dict]:
@@ -35,7 +36,7 @@ def safe_id(value: str) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Extract frozen RNA-FM mean-pooled embeddings for sequence-only JSONL.")
+    parser = argparse.ArgumentParser(description="Extract frozen RNA-FM sequence-level mean-pooled embeddings for RNA-OmniDistill Stage 1 pretraining.")
     parser.add_argument("--input", required=True, help="Input JSONL with seq or sequence field.")
     parser.add_argument("--output_jsonl", required=True, help="Output JSONL with teacher_embedding path field.")
     parser.add_argument("--output_npy", required=True, help="Output [N, D] embedding matrix.")

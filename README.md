@@ -1,43 +1,44 @@
-# RNA-OmniDiffusion
+# RNA-OmniDistill
 
-Pair-refined, constraint-guided masked diffusion for RNA secondary structure prediction.
+**Frozen RNA-FM Representation Distillation for Pair-Refined RNA Secondary Structure Prediction**
 
-This repository is organized as a compact, reproducible research codebase. The current model is not an LLM-powered system: it deliberately excludes external LLM calls, RNA-FM, RNA 3D, ligand, and protein tasks. The main contribution is a trainable pair-logit model with lightweight 2D refinement and strict Nussinov decoding.
+This repository is organized as a compact, reproducible research codebase. The current model is not an LLM-powered system: it deliberately excludes external LLM calls, RNA 3D, ligand, and protein tasks. The main contribution is a trainable pair-logit model with lightweight 2D refinement and strict Nussinov decoding, augmented by frozen RNA-FM representation distillation.
 
-## Current Claim
+## Framework
 
-RNA-OmniDiffusion is a candidate 2026-style model paper framework for RNA secondary structure prediction:
+RNA-OmniDistill is a two-stage framework for RNA secondary structure prediction.
 
-- masked discrete diffusion backbone over sequence and structure tokens
-- MLP pair head for base-pair logits
-- local 2D pair refinement on the pair-logit map
-- strict Nussinov decoding for valid non-crossing structures
-- staged-logit benchmark path for fast strict evaluation
-- documented negative results for token-only decode, greedy decode as final metric, conflict loss, and masking variants
+### Stage 1: Sequence-only Teacher-guided Pretraining
+- **Input**: Unlabeled RNA sequences
+- **Task**: Masked nucleotide denoising
+- **Teacher**: Frozen RNA-FM (representation teacher only -- never predicts structures)
+- **Teacher signal**: Sequence-level mean-pooled embedding
+- **Loss**: L_pretrain = L_denoise + lambda_distill * L_distill
 
-The paper framing and final experimental narrative are in [release/paper.md](release/paper.md).
+### Stage 2: Supervised Pairwise Structure Adaptation
+- **Input**: Labeled RNA secondary structures
+- **Loading**: Encoder-only from Stage 1 checkpoint
+- **Task**: Base-pair matrix prediction
+- **Modules**: Pair-logit head, lightweight 2D pair refinement, strict Nussinov decoding
+- **Loss**: L_finetune = L_token + lambda_pair * L_pair
+  (L_pair is the primary objective; L_token is auxiliary)
 
-## Main Results
+### DeepSeek Agent (Read-Only)
+The optional LLM agent is an experiment assistant only:
+- Experiment auditing, diagnosis, scheduling, comparison, reporting
+- Dry-run prompt generation
+- Does NOT participate in forward pass, training loss, or benchmark inference
+- Does NOT modify labels, predictions, or metrics
 
-### ArchiveII
+## Preliminary Result
 
-| Model | Pair F1 | Precision | Recall | Valid | Pair Ratio |
-|---|---:|---:|---:|---:|---:|
-| oldbase | 0.3846 | 0.3398 | 0.4465 | 1.0000 | 1.4213 |
-| norefine | 0.4966 | 0.4470 | 0.5630 | 1.0000 | 1.3913 |
-| candidate | 0.5689 | 0.5090 | 0.6517 | 1.0000 | 1.3808 |
+A single preliminary run on ArchiveII:
+- Baseline candidate Pair F1 = 0.5849
+- RNA-FM distilled pretraining (actual-2704) Pair F1 = 0.5959
 
-ArchiveII 3-seed stability: mean Pair F1 = 0.5813, std = 0.0078.
+**This is a preliminary single-run positive signal and should not be interpreted as a stable improvement** before seed repeats, D-only ablation, external benchmarks, and larger unlabeled pretraining.
 
-### bpRNA External
-
-| Model | Pair F1 | Precision | Recall | Valid | Pair Ratio | N |
-|---|---:|---:|---:|---:|---:|---:|
-| oldbase | 0.4234 | 0.4019 | 0.4741 | 1.0000 | 1.40 | 12,732 |
-| norefine | 0.4399 | 0.4083 | 0.5037 | 1.0000 | 1.42 | 12,732 |
-| candidate | 0.5285 | 0.4877 | 0.6070 | 1.0000 | 1.38 | 12,732 |
-
-External drop from ArchiveII candidate to bpRNA candidate is about 7.1%.
+Do not cite this as the main result. Do not claim statistical significance.
 
 ## Core Structure
 
@@ -81,7 +82,7 @@ Sweep decoding, audit collator, and trial config tools are available; see `docs/
 
 ## RNA-FM Frozen Teacher Pretraining
 
-RNA-FM is supported only as an optional frozen representation teacher for sequence-level self-supervised pretraining. It is not the main model, does not predict dot-bracket structures, does not generate pseudo pair labels, and is not used during benchmark inference. RNA-OmniDiffusion remains the student model used for structure prediction: Transformer encoder, pair head, optional 2D pair refinement, and strict Nussinov decoding.
+RNA-FM is supported only as an optional frozen representation teacher for **sequence-level** self-supervised pretraining. It provides mean-pooled embedding vectors per sequence. It does NOT perform token-level distillation, predict dot-bracket structures, generate pseudo pair labels, or participate in benchmark inference.
 
 Offline teacher extraction writes one mean-pooled embedding vector per sequence into a single `.npy` matrix and an index JSONL:
 
@@ -138,9 +139,11 @@ python scripts/run.py external --configs config/candidate.yaml --dataset bprna -
 Full reproduction details are in [release/reproduce.md](release/reproduce.md).
 For training and Agent usage details, see [docs/usage.md](docs/usage.md).
 
-## LLM Analysis Agent
+## DeepSeek Agent (Read-Only Experiment Assistant)
 
 The optional LLM agent is an experiment assistant, not a structure predictor. It only reads existing artifacts and writes Markdown/JSON reports. It never modifies labels, predictions, benchmark metrics, or test data.
+
+The Agent is a read-only experiment assistant. It does not run forward passes, compute training loss, execute benchmark inference, modify labels/predictions/metrics, or serve as a structure predictor. No agent output is used to claim model performance improvements.
 
 Environment variables are read from `.env`:
 
@@ -195,6 +198,10 @@ agent> doctor outputs/candidate config/candidate.yaml
 - Do not present masking as a main contribution on ArchiveII. The seed repeat found the effect inconclusive or negligible.
 - Do not describe this as RNA 3D, ligand, protein, RNA-FM, or Agent work.
 - Do not present pair-prior as a candidate-model contribution. It is an optional weak diagnostic probe only; see [docs/pairprior_probe.md](docs/pairprior_probe.md).
+- Do not claim RNA-FM distillation as a stable result without seed repeats.
+- Do not describe DeepSeek Agent as improving model performance.
+- Do not claim token-level distillation (only sequence-level).
+- Do not claim RNA-FM structural prior or pseudo pair labels.
 
 ## Current Limitations
 

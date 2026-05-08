@@ -22,7 +22,12 @@ class PairRefineBlock(nn.Module):
 
 
 class RNAOmniDiffusion(nn.Module):
-    """Minimal masked discrete diffusion model for RNA sequence/structure tasks."""
+    """Minimal masked discrete diffusion model for RNA sequence/structure tasks.
+
+    Distill_head (if enabled): Projects encoder hidden states to match frozen RNA-FM
+    teacher dimension for sequence-level distillation. The teacher provides mean-pooled
+    embeddings only — no token-level or pair-level signals.
+    """
 
     def __init__(
         self,
@@ -185,6 +190,7 @@ class RNAOmniDiffusion(nn.Module):
         }
 
     def _student_embedding(self, hidden: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        # Sequence-level mean-pooled student embedding for distillation (matches teacher's mean-pooled output)
         if self.distill_pool != "mean":
             raise ValueError("Only mean distillation pooling is supported.")
         valid = attention_mask.float().unsqueeze(-1)

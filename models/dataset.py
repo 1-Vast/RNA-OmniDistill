@@ -62,6 +62,7 @@ class RNAOmniDataset:
             raise ValueError(f"{self.path}:{line_no} must contain 'seq' or 'sequence'.")
         if "struct" not in raw and not self.allow_unlabeled:
             raise ValueError(f"{self.path}:{line_no} must contain 'struct' unless allow_unlabeled=True.")
+        # Support sequence-only JSONL for Stage 1 pretraining (no struct/pairs required)
 
         seq = str(raw.get("seq", raw.get("sequence"))).upper().replace("T", "U")
         seq = "".join(base if base in {"A", "U", "G", "C", "N"} else "N" for base in seq)

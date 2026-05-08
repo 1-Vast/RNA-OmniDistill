@@ -85,7 +85,7 @@ def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     model.setdefault("distbuckets", 32)
     model.setdefault("distmax", data.get("max_length", 512))
     model.setdefault("invalidlogit", -20.0)
-    model.setdefault("distill_dim", model.get("rnafm_embedding_dim", 0))
+    model.setdefault("distill_dim", model.get("rnafm_embedding_dim", 0))  # RNA-FM teacher provides sequence-level embedding only
     tasks = config.setdefault("tasks", {})
     if "seq_denoise" in tasks and "denoise" not in tasks:
         tasks["denoise"] = tasks["seq_denoise"]
@@ -245,6 +245,8 @@ ENCODER_PRETRAIN_PREFIXES = (
 
 
 def load_encoder_only_pretrain(model: RNAOmniDiffusion, ckpt_path: str | Path, device: torch.device) -> dict:
+    # Encoder-only loading: skips pair head, distill head, and other task-specific heads.
+    # Used for RNA-OmniDistill Stage 1 -> Stage 2 transition.
     _, _, checkpoint = load_checkpoint(ckpt_path, device)
     source = checkpoint["model_state"]
     target = model.state_dict()

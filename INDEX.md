@@ -1,4 +1,4 @@
-# RNA-OmniDiffusion Index
+# RNA-OmniDistill Index
 
 ## Paper Entry
 
@@ -45,6 +45,7 @@
 
 ## Docs
 
+- `docs/rna_omnidistill.md`: Framework documentation for RNA-OmniDistill two-stage method.
 - `docs/usage.md`: direct CLI training, Agent-assisted training, local/remote device setup, Agent memory, and target tuning plan guide.
 - `docs/agent.md`: Agent safety architecture reference.
 - `docs/agent_guide.md`: Comprehensive Agent usage guide with natural language examples and remote workflow.

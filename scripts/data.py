@@ -135,6 +135,111 @@ def split(args: argparse.Namespace) -> None:
     print(f"split -> {out}")
 
 
+def prep_rfam_fasta(args: argparse.Namespace) -> None:
+    input_dir = Path(args.input)
+    output_path = Path(args.output)
+    min_length = int(getattr(args, "min_length", 20))
+    max_length = int(getattr(args, "max_length", 512))
+    dedup = bool(getattr(args, "dedup", False))
+    limit_val = getattr(args, "limit", None)
+    seed = int(getattr(args, "seed", 42))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fasta_files = sorted(
+        p for p in input_dir.glob("RF*.fa.gz") if p.is_file()
+    )
+    if not fasta_files:
+        print(f"No RF*.fa.gz files found in {input_dir}", file=sys.stderr)
+        return
+
+    rng = random.Random(seed)
+    seen = set()
+    count = 0
+
+    with output_path.open("w", encoding="utf-8") as handle:
+        for fa_path in fasta_files:
+            stem = fa_path.name.replace(".fa.gz", "").replace(".fa", "")
+            family = stem
+
+            try:
+                with gzip.open(fa_path, "rt", encoding="utf-8", errors="replace") as fh:
+                    seq_id = None
+                    seq_parts = []
+                    for line in fh:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        if line.startswith(">"):
+                            if seq_id is not None and seq_parts:
+                                seq = "".join(seq_parts).upper().replace("T", "U")
+                                seq = "".join(
+                                    base if base in {"A", "U", "G", "C", "N"} else "N"
+                                    for base in seq
+                                )
+                                length = len(seq)
+                                if min_length <= length <= max_length:
+                                    if not dedup or seq not in seen:
+                                        if dedup:
+                                            seen.add(seq)
+                                        sample_id = f"{family}_{seq_id or 'seq'}"
+                                        row = {
+                                            "id": sample_id,
+                                            "seq": seq,
+                                            "family": family,
+                                            "source": "rfam_fasta",
+                                        }
+                                        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+                                        count += 1
+                                        if limit_val is not None and count >= int(limit_val):
+                                            break
+                            header = line[1:].split(None, 1)
+                            seq_id = header[0] if header else None
+                            seq_parts = []
+                        else:
+                            seq_parts.append(line)
+
+                    if seq_id is not None and seq_parts and (limit_val is None or count < int(limit_val)):
+                        seq = "".join(seq_parts).upper().replace("T", "U")
+                        seq = "".join(
+                            base if base in {"A", "U", "G", "C", "N"} else "N"
+                            for base in seq
+                        )
+                        length = len(seq)
+                        if min_length <= length <= max_length:
+                            if not dedup or seq not in seen:
+                                if dedup:
+                                    seen.add(seq)
+                                sample_id = f"{family}_{seq_id or 'seq'}"
+                                row = {
+                                    "id": sample_id,
+                                    "seq": seq,
+                                    "family": family,
+                                    "source": "rfam_fasta",
+                                }
+                                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+                                count += 1
+            except Exception as exc:
+                print(f"Warning: failed to process {fa_path}: {exc}", file=sys.stderr)
+                continue
+
+            if limit_val is not None and count >= int(limit_val):
+                break
+
+    print(json.dumps({
+        "command": "prep_rfam_fasta",
+        "input": str(input_dir),
+        "output": str(output_path),
+        "families_scanned": len(fasta_files),
+        "sequences_written": count,
+        "min_length": min_length,
+        "max_length": max_length,
+        "dedup": dedup,
+        "limit": limit_val,
+        "seed": seed,
+    }, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch and prepare RNA datasets.")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -159,6 +264,15 @@ def main() -> None:
     s.add_argument("--mode", default="random")
     s.add_argument("--seed", type=int, default=42)
     s.set_defaults(func=split)
+    rf = sub.add_parser("prep_rfam_fasta")
+    rf.add_argument("--input", required=True, help="Directory containing RF*.fa.gz files")
+    rf.add_argument("--output", required=True, help="Output sequence-only JSONL path")
+    rf.add_argument("--min_length", type=int, default=20)
+    rf.add_argument("--max_length", type=int, default=512)
+    rf.add_argument("--dedup", action="store_true")
+    rf.add_argument("--limit", type=int, default=None)
+    rf.add_argument("--seed", type=int, default=42)
+    rf.set_defaults(func=prep_rfam_fasta)
     args = parser.parse_args()
     args.func(args)
 

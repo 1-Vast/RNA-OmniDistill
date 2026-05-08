@@ -1,10 +1,11 @@
-# Stage 2: Supervised pairwise structure adaptation
-# RNA-OmniDistill framework
-# - Initialized from Stage 1 encoder-only checkpoint
+# Stage 2 (D-only): Supervised pair-refined structure adaptation from D-only pretrained encoder
+# RNA-OmniDistill ablation baseline
+# - Initialized from D-only Stage 1 encoder checkpoint
 # - Input: labeled RNA secondary structures
 # - Task: base-pair matrix prediction with pair-refined Nussinov decoding
 # - Loss: L_finetune = L_token + lambda_pair * L_pair
-# - L_pair is the primary objective; L_token is auxiliary
+# - Purpose: Compare D-only vs D-RNAFM to isolate distillation contribution
+
 data:
   train_jsonl: dataset/archive/train.jsonl
   val_jsonl: dataset/archive/val.jsonl
@@ -47,9 +48,9 @@ training:
   grad_clip: 1.0
   amp: true
   seed: 42
-  output_dir: outputs/candidate_from_rnafm_pretrain
-  init_from_pretrain: outputs/seq_pretrain_rnafm/best.pt  # Stage 1 checkpoint
-  load_encoder_only: true      # Encoder-only from Stage 1 — no distillation head weights loaded
+  output_dir: outputs/candidate_from_seq_pretrain
+  init_from_pretrain: outputs/seq_pretrain/best.pt
+  load_encoder_only: true  # Encoder-only from D-only Stage 1
   save_best_by: val_loss
   early_stopping_patience: 10
   min_delta: 0.0001
@@ -69,7 +70,6 @@ decoding:
   topk_pairs: 20
 
 ablation:
-  # During fine-tune: pair head, pair loss, and Nussinov decoding enabled
   use_pair_head: true
   use_pair_loss: true
   use_nussinov: true

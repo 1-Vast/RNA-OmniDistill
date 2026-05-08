@@ -38,7 +38,7 @@ class RNAOmniCollator:
         self.use_motif_span_masking = bool(self.ablation.get("use_motif_span_masking", True))
         self.use_motif_condition = bool(self.ablation.get("use_motif_condition", True))
         self.use_family_condition = bool(self.ablation.get("use_family_condition", True))
-        self._teacher_cache: dict[str, np.ndarray] = {}
+        self._teacher_cache: dict[str, np.ndarray] = {}  # Cache for sequence-level teacher embeddings; teacher provides one vector per sequence
         ratios = dict(task_ratios)
         if "seq_denoise" in ratios and "denoise" not in ratios:
             ratios["denoise"] = ratios["seq_denoise"]
@@ -69,7 +69,7 @@ class RNAOmniCollator:
         pair_mask = torch.zeros((len(examples), max_len, max_len), dtype=torch.bool)
         pair_positive_counts = torch.zeros(len(examples), dtype=torch.long)
         pair_negative_counts = torch.zeros(len(examples), dtype=torch.long)
-        teacher_embedding, teacher_mask = self._load_teacher_embeddings(examples)
+        teacher_embedding, teacher_mask = self._load_teacher_embeddings(examples)  # Load sequence-level frozen teacher embedding per sample (NOT token-level)
         is_labeled = torch.tensor([bool(example.get("is_labeled", True)) for example in examples], dtype=torch.bool)
 
         for batch_idx, example in enumerate(examples):

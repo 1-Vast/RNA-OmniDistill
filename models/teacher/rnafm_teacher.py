@@ -13,6 +13,13 @@ class RNAFMTeacher:
 
     This adapter is intentionally outside ``models.omni`` so RNA-FM stays an
     optional offline teacher and never becomes part of benchmark inference.
+
+    This teacher provides sequence-level mean-pooled embeddings only.
+    It is NOT used for:
+    - Token-level distillation
+    - Structure prediction (dot-bracket)
+    - Pseudo pair-label generation
+    - Benchmark inference
     """
 
     def __init__(
@@ -60,6 +67,7 @@ class RNAFMTeacher:
         return array.astype(np.float16 if self.dtype == "float16" else np.float32)
 
     def encode(self, sequences: Sequence[str], pool: str = "mean") -> torch.Tensor:
+        # Returns sequence-level mean-pooled embedding (NOT token-level)
         if self.dummy:
             return torch.tensor(np.stack([self._dummy_embedding(seq) for seq in sequences]), dtype=torch.float32)
         if pool != "mean":
@@ -97,6 +105,7 @@ class RNAFMTeacher:
         return {"input_ids": input_ids, "attention_mask": attention_mask, "pool_mask": pool_mask}
 
     def _dummy_embedding(self, seq: str) -> np.ndarray:
+        # Dummy sequence-level embedding for smoke tests — deterministic per sequence
         values = np.zeros((self.dummy_dim,), dtype="float32")
         state = 2166136261
         for char in str(seq).upper().replace("T", "U"):
