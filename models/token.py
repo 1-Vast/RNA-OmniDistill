@@ -50,6 +50,26 @@ class RNAOmniTokenizer:
         "<CONSTRAINT=preserve_stem>", "<CONSTRAINT=preserve_loop>",
         "<CONSTRAINT=maintain_pairing>", "<CONSTRAINT=UNKNOWN>",
     ]
+    # LLM-guided semantic tokens (RNA-OmniDistill-LLM)
+    llm_semantic_tokens = [
+        "<LEN_SHORT>", "<LEN_MEDIUM>", "<LEN_LONG>", "<LEN_VERY_LONG>",
+        "<GC_LOW>", "<GC_MEDIUM>", "<GC_HIGH>",
+        "<AU_LOW>", "<AU_MEDIUM>", "<AU_HIGH>",
+        "<LOCAL_COMP_WEAK>", "<LOCAL_COMP_MODERATE>", "<LOCAL_COMP_STRONG>",
+        "<PAL_LOW>", "<PAL_MEDIUM>", "<PAL_HIGH>",
+        "<PAIR_DENSITY_LOW>", "<PAIR_DENSITY_MEDIUM>", "<PAIR_DENSITY_HIGH>",
+        "<STEM_LOOP_LOW>", "<STEM_LOOP_MEDIUM>", "<STEM_LOOP_HIGH>",
+        "<HAIRPIN_LOW>", "<HAIRPIN_MEDIUM>", "<HAIRPIN_HIGH>",
+        "<LONG_RANGE_LOW>", "<LONG_RANGE_MEDIUM>", "<LONG_RANGE_HIGH>",
+        "<STABILITY_LOW>", "<STABILITY_MEDIUM>", "<STABILITY_HIGH>",
+        "<MOTIF_STEM_LOOP>", "<MOTIF_HAIRPIN>", "<MOTIF_INTERNAL_LOOP>",
+        "<MOTIF_BULGE>", "<MOTIF_MULTI_LOOP>", "<MOTIF_UNKNOWN>",
+        "<FAMILY_TRNA_LIKE>", "<FAMILY_RRNA_LIKE>", "<FAMILY_RIBOSWITCH_LIKE>",
+        "<FAMILY_MIRNA_LIKE>", "<FAMILY_LNCRNA_LIKE>", "<FAMILY_UNKNOWN>",
+        "<LLM_CONF_LOW>", "<LLM_CONF_MEDIUM>", "<LLM_CONF_HIGH>",
+        "<SEM_UNKNOWN>",
+    ]
+
     family_other = "<FAMILY_OTHER>"
 
     task_name_to_token = {
@@ -66,6 +86,7 @@ class RNAOmniTokenizer:
             + self.task_tokens
             + self.motif_tokens
             + self.semantic_condition_tokens
+            + self.llm_semantic_tokens
             + [self.family_other]
             + self.sequence_tokens
             + self.structure_tokens

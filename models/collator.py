@@ -38,6 +38,8 @@ class RNAOmniCollator:
         self.use_motif_span_masking = bool(self.ablation.get("use_motif_span_masking", True))
         self.use_motif_condition = bool(self.ablation.get("use_motif_condition", True))
         self.use_family_condition = bool(self.ablation.get("use_family_condition", True))
+        self.use_llm_semantics = bool(self.ablation.get("use_llm_semantics", False))
+        self.semantic_dropout_prob = float(self.ablation.get("semantic_dropout_prob", 0.0))
         self._teacher_cache: dict[str, np.ndarray] = {}  # Cache for sequence-level teacher embeddings; teacher provides one vector per sequence
         ratios = dict(task_ratios)
         if "seq_denoise" in ratios and "denoise" not in ratios:
@@ -72,6 +74,9 @@ class RNAOmniCollator:
         teacher_embedding, teacher_mask = self._load_teacher_embeddings(examples)  # Load sequence-level frozen teacher embedding per sample (NOT token-level)
         is_labeled = torch.tensor([bool(example.get("is_labeled", True)) for example in examples], dtype=torch.bool)
 
+        # LLM semantic tokens (segment_id=3)
+        semantic_present = torch.zeros(len(examples), dtype=torch.bool)
+
         for batch_idx, example in enumerate(examples):
             token_count = len(example["input_ids"])
             length = example["length"]
@@ -90,6 +95,56 @@ class RNAOmniCollator:
             )
             pair_positive_counts[batch_idx] = positive_count
             pair_negative_counts[batch_idx] = negative_count
+
+        # Inject LLM semantic tokens if enabled
+        if self.use_llm_semantics:
+            semantic_tokens_list = []
+            for example in examples:
+                st = example.get("semantic_tokens", [])
+                if not st:
+                    st = ["<SEM_UNKNOWN>"]
+                semantic_tokens_list.append(st)
+
+            # Inject semantic tokens into input_ids (prepend before sequence)
+            # We insert semantic tokens at the front with segment_id=3
+            max_sem_len = max(len(st) for st in semantic_tokens_list)
+            if max_sem_len > 0:
+                new_input_ids = torch.full((len(examples), max_tokens + max_sem_len), self.tokenizer.pad_id, dtype=torch.long)
+                new_labels = torch.full((len(examples), max_tokens + max_sem_len), -100, dtype=torch.long)
+                new_attention_mask = torch.zeros((len(examples), max_tokens + max_sem_len), dtype=torch.long)
+                new_segment_ids = torch.zeros((len(examples), max_tokens + max_sem_len), dtype=torch.long)
+
+                for b in range(len(examples)):
+                    sem_ids = [self.tokenizer.token_id(t) if t in self.tokenizer.token_to_id else self.tokenizer.token_id("<SEM_UNKNOWN>") for t in semantic_tokens_list[b]]
+                    sem_len = len(sem_ids)
+                    # Semantic tokens at front with segment=3
+                    new_input_ids[b, :sem_len] = torch.tensor(sem_ids, dtype=torch.long)
+                    new_segment_ids[b, :sem_len] = 3  # Segment 3 = semantic condition
+                    new_attention_mask[b, :sem_len] = 1
+                    # Original tokens follow
+                    orig_len = int(attention_mask[b].sum())
+                    new_input_ids[b, sem_len:sem_len+orig_len] = input_ids[b, :orig_len]
+                    new_labels[b, sem_len:sem_len+orig_len] = labels[b, :orig_len]
+                    new_attention_mask[b, sem_len:sem_len+orig_len] = attention_mask[b, :orig_len]
+                    new_segment_ids[b, sem_len:sem_len+orig_len] = segment_ids[b, :orig_len]
+
+                input_ids = new_input_ids
+                labels = new_labels
+                attention_mask = new_attention_mask
+                segment_ids = new_segment_ids
+
+                # Apply semantic dropout (randomly mask semantic tokens during training)
+                if self.semantic_dropout_prob > 0.0:
+                    for b in range(len(examples)):
+                        sem_len = len(semantic_tokens_list[b])
+                        if sem_len > 0:
+                            mask = torch.rand(sem_len) < self.semantic_dropout_prob
+                            input_ids[b, :sem_len] = torch.where(
+                                mask,
+                                torch.full((sem_len,), self.tokenizer.token_id("<MASK>"), dtype=torch.long),
+                                input_ids[b, :sem_len]
+                            )
+                            semantic_present[b] = True
 
         task_names = [example["task_name"] for example in examples]
         task_ids = torch.tensor([self.tokenizer.task_to_id["denoise" if name == "seq_denoise" else name] for name in task_names], dtype=torch.long)
