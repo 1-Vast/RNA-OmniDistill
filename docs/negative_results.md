@@ -35,7 +35,7 @@ LLM semantic token conditioning was tested as an auxiliary conditioning path, wh
 
 ### Conclusion
 
-LLM semantic token conditioning is excluded from the RNA-OmniDistill mainline. The deprecated code is preserved in `models/deprecated/`, `scripts/deprecated/`, and `config/deprecated/` for reproducibility.
+LLM semantic token conditioning is excluded from the RNA-OmniDistill mainline.
 
 ---
 
