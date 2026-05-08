@@ -48,15 +48,19 @@ from agent.safety import (
 
 
 EXAMPLES_TEXT = """Try:
-  杩愯 smoke
-  妫€鏌?candidate
-  鏌ユ壘瀹為獙
-  鏌ョ湅璁板繂
-  鍘嬬缉璁板繂
-  璁剧疆璁粌璁惧涓鸿繙绋?  璁惧畾鐩爣 pair_f1 >= 0.75, 鏈€澶氳皟鍙?3 娆?  鎵弿瑙ｇ爜鍙傛暟
-  瀹¤ collator
-  鏌ョ湅杩滅▼鐧诲綍鍛戒护
-  鏌ョ湅杩愯鐜"""
+  运行 smoke
+  检查 candidate
+  查找实验
+  查看记忆
+  压缩记忆
+  设置训练设备为远程
+  设定目标 pair_f1 >= 0.75 最大调参 3 次
+  扫描解码参数
+  审计 collator
+  查看远程登录命令
+  查看运行环境
+  compare outputs/candidate outputs/candidate_from_rnafm_pretrain
+  diagnose outputs/candidate_from_rnafm_pretrain"""
 
 
 def agent_welcome(state: dict[str, Any]) -> str:
