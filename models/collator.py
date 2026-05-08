@@ -38,6 +38,24 @@ class RNAOmniCollator:
         self.use_motif_span_masking = bool(self.ablation.get("use_motif_span_masking", True))
         self.use_motif_condition = bool(self.ablation.get("use_motif_condition", True))
         self.use_family_condition = bool(self.ablation.get("use_family_condition", True))
+        self.use_relation_mask = bool(self.ablation.get("use_relation_mask", False))
+        if self.use_relation_mask:
+            from models.relation_mask import MultiScaleRelationMaskSampler
+            rm_cfg = self.ablation.get("relation_mask", {})
+            self.relation_sampler = MultiScaleRelationMaskSampler(
+                mode=str(rm_cfg.get("mode", "multiscale")),
+                global_ratio=float(rm_cfg.get("global_ratio", 0.25)),
+                stem_span_ratio=float(rm_cfg.get("stem_span_ratio", 0.35)),
+                hard_negative_ratio=float(rm_cfg.get("hard_negative_ratio", 0.40)),
+                total_ratio=float(rm_cfg.get("total_ratio", 0.25)),
+                stem_span_len=int(rm_cfg.get("stem_span_len", 4)),
+                min_pair_distance=int(rm_cfg.get("min_pair_distance", 4)),
+                long_range_threshold=int(rm_cfg.get("long_range_threshold", 64)),
+                canonical_hard_negative=bool(rm_cfg.get("canonical_hard_negative", True)),
+                seed=int(rm_cfg.get("seed", 42)),
+            )
+        else:
+            self.relation_sampler = None
         self._teacher_cache: dict[str, np.ndarray] = {}  # Cache for sequence-level teacher embeddings; teacher provides one vector per sequence
         ratios = dict(task_ratios)
         if "seq_denoise" in ratios and "denoise" not in ratios:
@@ -91,6 +109,20 @@ class RNAOmniCollator:
             pair_positive_counts[batch_idx] = positive_count
             pair_negative_counts[batch_idx] = negative_count
 
+        # MS-MPRM: multi-scale relation loss mask
+        relation_loss_mask = pair_mask.clone()
+        relation_mask_stats = {}
+        if self.use_relation_mask and self.relation_sampler is not None:
+            for b in range(len(examples)):
+                raw_seq = examples[b].get("raw_seq", "")
+                rmask, rstats = self.relation_sampler.sample(
+                    raw_seq, pair_labels[b], pair_mask[b]
+                )
+                relation_loss_mask[b] = rmask
+                for k, v in rstats.items():
+                    relation_mask_stats.setdefault(k, 0)
+                    relation_mask_stats[k] += v
+
         task_names = [example["task_name"] for example in examples]
         task_ids = torch.tensor([self.tokenizer.task_to_id["denoise" if name == "seq_denoise" else name] for name in task_names], dtype=torch.long)
 
@@ -106,6 +138,8 @@ class RNAOmniCollator:
             "pair_mask": pair_mask,
             "pair_positive_counts": pair_positive_counts,
             "pair_negative_counts": pair_negative_counts,
+            "relation_loss_mask": relation_loss_mask,
+            "relation_mask_stats": relation_mask_stats,
             "seq_positions": seq_positions,
             "struct_positions": struct_positions,
             "lengths": torch.tensor([example["length"] for example in examples], dtype=torch.long),
