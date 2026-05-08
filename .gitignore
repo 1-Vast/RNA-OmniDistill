@@ -38,3 +38,8 @@ venv/
 
 .DS_Store
 Thumbs.db
+
+# Temporary experiment sandbox
+experiments_tmp/llm_curriculum/outputs/
+dataset/processed_tmp/
+*.policy.tmp.jsonl

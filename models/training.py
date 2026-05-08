@@ -524,16 +524,6 @@ def update_running(total: dict, loss_dict: dict, batch_size: int) -> None:
         total.setdefault(f"{key}_count", 0)
         total[f"{key}_sum"] += float(value)
         total[f"{key}_count"] += 1
-    # MS-MPRM: propagate relation_mask_* keys dynamically
-    for key in list(loss_dict.keys()):
-        if key.startswith("relation_mask_"):
-            value = loss_dict[key]
-            if torch.is_tensor(value):
-                value = float(value.detach().cpu())
-            total.setdefault(f"{key}_sum", 0.0)
-            total.setdefault(f"{key}_count", 0)
-            total[f"{key}_sum"] += float(value)
-            total[f"{key}_count"] += 1
 
 
 def averages(total: dict, prefix: str) -> dict:
