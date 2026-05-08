@@ -30,6 +30,7 @@
 
 - `docs/rna_omnidistill.md`: main method formulation and framework architecture.
 - `docs/dataset_processing_and_splits.md`: Rfam, bpRNA, RNAcentral data pipeline and split documentation.
+- `docs/negative_results.md`: excluded experimental branches (LLM semantic, token-only decode, etc.).
 - `docs/experiment_plan.md`: reproducibility, ablation, external benchmark, and calibration experiment matrix.
 - `docs/usage.md`: local CLI usage for training, evaluation, inference, data processing, and audits.
 

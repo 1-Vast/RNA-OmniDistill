@@ -55,7 +55,6 @@ class RNAOmniDiffusion(nn.Module):
         use_distill_head: bool = False,
         teacher_dim: int = 640,
         distill_pool: str = "mean",
-        semantic_dropout_prob: float = 0.0,
     ) -> None:
         super().__init__()
         self.vocab_size = vocab_size
@@ -70,7 +69,6 @@ class RNAOmniDiffusion(nn.Module):
         self.teacher_dim = int(distill_dim or teacher_dim)
         self.use_distill_head = bool(use_distill_head or distill_dim)
         self.distill_pool = str(distill_pool)
-        self.semantic_dropout_prob = float(semantic_dropout_prob)
         self.token_embedding = nn.Embedding(vocab_size, hidden_size)
         self.position_embedding = nn.Embedding(max_position_embeddings, hidden_size)
         self.segment_embedding = nn.Embedding(num_segments, hidden_size)

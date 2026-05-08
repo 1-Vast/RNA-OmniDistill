@@ -186,12 +186,18 @@ Important local artifacts are ignored by git:
 
 ## What Not To Claim
 
-- not RNA-FM structure prediction
-- not token-level distillation
-- not pair prior
-- not language-model semantic conditioning
-- not a foundation model
-- not a language-model-powered system
+- Not an LLM-powered predictor.
+- Does not use LLM semantic tokens in the mainline.
+- Does not use token-level RNA-FM distillation.
+- Does not use RNA-FM pair priors.
+- Does not use RNA-FM or LLM pseudo-structure labels.
+- Does not use an Agent during training or inference.
+- Not a foundation model.
+- Not RNA-FM structure prediction.
+
+## Negative Results
+
+See [docs/negative_results.md](docs/negative_results.md) for excluded experimental branches, including LLM semantic conditioning, token-only decode, greedy decode as final metric, conflict loss, and masking variants.
 - no pseudo pair labels
 - no RNA-FM structural prior
 
