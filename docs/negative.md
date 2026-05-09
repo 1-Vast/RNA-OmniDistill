@@ -2,9 +2,9 @@
 
 This document records experimental branches that were tested but are excluded from the RNA-OmniPrefold mainline.
 
-## Sequence-Level Representation Distillation
+## Sequence-Level Representation Distillation (RNA-FM)
 
-Sequence-level teacher distillation was tested as an optional sequence-pretraining signal and has been removed from the mainline.
+Sequence-level teacher distillation (RNA-FM) was tested as an optional sequence-pretraining signal and has been removed from the mainline. All RNA-FM related code (models/teacher, scripts/extract_rnafm_embeddings.py, RNA-FM configs) has been deleted from the main branch.
 
 Evidence:
 
@@ -12,7 +12,7 @@ Evidence:
 - In that toy run, fine-tune best validation loss was slightly worse with teacher distillation: 1.0245 vs 0.9643 for D-only.
 - In the earlier Rfam 50k single-seed comparison, the isolated teacher contribution was small: Pair F1 0.5969 vs 0.5925 for D-only, a +0.44pp difference.
 
-Conclusion: sequence-level representation distillation is not a main contribution in this repository.
+Conclusion: RNA-FM sequence-level representation distillation is no longer part of this repository. Deleted on 2026-05-09 (commit 6e9e468).
 
 ## LLM Semantic Conditioning
 

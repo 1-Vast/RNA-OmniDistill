@@ -87,6 +87,13 @@ def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     tasks = config.setdefault("tasks", {})
     if "seq_denoise" in tasks and "denoise" not in tasks:
         tasks["denoise"] = tasks["seq_denoise"]
+    pref = config.setdefault("preference", {})
+    pref.setdefault("enabled", False)
+    pref.setdefault("buffer_path", None)
+    pref.setdefault("beta", 0.05)
+    pref.setdefault("min_confidence", 0.6)
+    pref.setdefault("start_epoch_ratio", 0.3)
+    pref.setdefault("loss_type", "ranking")
     return config
 
 
@@ -480,6 +487,14 @@ def update_running(total: dict, loss_dict: dict, batch_size: int) -> None:
     total["samples"] += batch_size
     for key in ("loss", "token_loss", "pair_loss", "conflict_loss"):
         total[key] += float(loss_dict[key].detach().cpu()) * batch_size
+    # preference metrics
+    for key in ("pref_loss", "pref_covered"):
+        val = loss_dict.get(key)
+        if val is not None:
+            if torch.is_tensor(val):
+                total[key] += float(val.detach().cpu())
+            elif key == "pref_covered":
+                total[key] += int(val)
     for key in (
         "pos",
         "neg",
@@ -522,6 +537,12 @@ def averages(total: dict, prefix: str) -> dict:
         f"{prefix}_pair_loss": total["pair_loss"] / denom,
         f"{prefix}_conflict_loss": total["conflict_loss"] / denom,
     }
+    if total.get("pref_covered", 0) > 0:
+        result[f"{prefix}_pref_loss"] = total.get("pref_loss", 0.0) / total["pref_covered"]
+        result[f"{prefix}_pref_coverage"] = total["pref_covered"] / max(1, total["samples"])
+    else:
+        result[f"{prefix}_pref_loss"] = 0.0
+        result[f"{prefix}_pref_coverage"] = 0.0
     for key in (
         "pos",
         "neg",
@@ -754,6 +775,24 @@ def train_model(
     train_loader = make_loader(train_dataset_for_loader, tokenizer, config, shuffle=True)
     val_loader = make_loader(val_dataset, tokenizer, config, shuffle=False)
 
+    # -- preference buffer ---------------------------------------------------
+    pref_cfg = config.get("preference", {})
+    pref_enabled = bool(pref_cfg.get("enabled", False))
+    pref_beta = float(pref_cfg.get("beta", 0.05))
+    pref_min_conf = float(pref_cfg.get("min_confidence", 0.6))
+    pref_start_ratio = float(pref_cfg.get("start_epoch_ratio", 0.3))
+    pref_epoch_start = max(1, int(int(config["training"]["epochs"]) * pref_start_ratio))
+    pref_lookup: dict = {}
+    if pref_enabled:
+        bp = pref_cfg.get("buffer_path")
+        if bp:
+            from models.pref import load_buffer, build_lookup
+            buffer = load_buffer(bp)
+            pref_lookup = build_lookup(buffer, min_confidence=pref_min_conf)
+            print(f"Preference buffer loaded: {len(pref_lookup)} entries from {bp} (beta={pref_beta}, min_conf={pref_min_conf}, start_epoch={pref_epoch_start})")
+        else:
+            pref_enabled = False
+
     if config.get("debug", {}).get("check_pair_batch", False):
         print_pair_batch_debug(next(iter(train_loader)))
 
@@ -814,7 +853,7 @@ def train_model(
     for epoch in range(start_epoch, int(config["training"]["epochs"]) + 1):
         epoch_start = time.time()
         model.train()
-        train_totals = {"samples": 0, "loss": 0.0, "token_loss": 0.0, "pair_loss": 0.0, "conflict_loss": 0.0}
+        train_totals = {"samples": 0, "loss": 0.0, "token_loss": 0.0, "pair_loss": 0.0, "conflict_loss": 0.0, "pref_loss": 0.0, "pref_covered": 0}
         for batch in train_loader:
             batch = move_batch_to_device(batch, device)
             optimizer.zero_grad(set_to_none=True)
@@ -822,6 +861,26 @@ def train_model(
                 outputs = forward_model(model, batch)
                 loss_dict = loss_from_batch(outputs, batch, loss_options)
                 loss = loss_dict["loss"]
+
+                # -- preference loss (optional, epoch-gated) -----------------
+                pref_loss_val = torch.tensor(0.0, device=device)
+                pref_covered = 0
+                if pref_enabled and pref_lookup and epoch >= pref_epoch_start:
+                    pair_logits = outputs.get("pair_logits")
+                    if pair_logits is not None:
+                        from models.pref import compute_batch_pref_loss
+                        pf, pc = compute_batch_pref_loss(
+                            pair_logits,
+                            batch.get("sample_ids", []),
+                            batch["lengths"],
+                            pref_lookup,
+                        )
+                        if pc > 0:
+                            pref_loss_val = pf
+                            pref_covered = pc
+                            loss = loss + pref_beta * pref_loss_val
+                loss_dict["pref_loss"] = pref_loss_val.detach()
+                loss_dict["pref_covered"] = pref_covered
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(config["training"].get("grad_clip", 1.0)))
@@ -831,12 +890,16 @@ def train_model(
             global_step += 1
             update_running(train_totals, loss_dict, int(batch["input_ids"].size(0)))
             if global_step == 1 or global_step % log_every == 0:
+                pref_str = ""
+                if loss_dict.get("pref_covered", 0) > 0:
+                    pref_str = f" pref={float(loss_dict['pref_loss'].cpu()):.4f} pref_cov={loss_dict['pref_covered']}"
                 print(
                     f"step={global_step} epoch={epoch} "
                     f"loss={float(loss.detach().cpu()):.4f} "
                     f"token={float(loss_dict['token_loss'].cpu()):.4f} "
                     f"pair={float(loss_dict['pair_loss'].cpu()):.4f} "
                     f"conflict={float(loss_dict['conflict_loss'].cpu()):.4f}"
+                    f"{pref_str}"
                 )
             if max_steps is not None and global_step >= max_steps:
                 break
@@ -882,6 +945,9 @@ def train_model(
             "load_encoder_only": bool(config["training"].get("load_encoder_only", False)),
             "pretrain_loaded_keys": len(pretrain_load_report["loaded"]) if pretrain_load_report else 0,
             "pretrain_skipped_keys": len(pretrain_load_report["skipped"]) if pretrain_load_report else 0,
+            "pref_enabled": pref_enabled,
+            "pref_beta": pref_beta if pref_enabled else 0.0,
+            "pref_epoch_start": pref_epoch_start if pref_enabled else 0,
         }
         history.append(epoch_metrics)
         print(epoch_line(epoch_metrics, epoch, int(config["training"]["epochs"])))
