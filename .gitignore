@@ -30,8 +30,6 @@ dataset/processed/rfam/
 dataset/processed/crw_trna/
 
 .env
-external/rnafm/checkpoints/
-external/RNA-FM/checkpoints/
 .venv/
 venv/
 .vscode/

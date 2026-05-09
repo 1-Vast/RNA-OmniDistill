@@ -2,13 +2,13 @@
 
 > **Replaces**: RNAStrAND (manual download only — `rnasoft.ca/strand/downloads.php`)
 > **Last updated**: 2026-05-07
-> **Project**: RNA-OmniDiffusion
+> **Project**: RNA-OmniPrefold
 
 ---
 
 ## Overview
 
-This document lists 6 **auto-downloadable** datasets that replace the manual-only RNAStrAND. Each has verified direct download URLs, known secondary structure annotations, and documented preprocessing pipelines compatible with the RNA-OmniDiffusion codebase.
+This document lists 6 **auto-downloadable** datasets that replace the manual-only RNAStrAND. Each has verified direct download URLs, known secondary structure annotations, and documented preprocessing pipelines compatible with the RNA-OmniPrefold codebase.
 
 | # | Dataset | Sequences | Families | Format | Auto-DL | Best For |
 |---|---------|-----------|----------|--------|---------|----------|
@@ -57,7 +57,7 @@ Also available in bpseq, bracket (Vienna dot-bracket), alden, rnaml, and nopct f
 
 ```bash
 # Download all tRNA CT files into dataset/raw/crw_trna/
-python scripts/download_datasets.py --raw-root D:\RNA-OmniDiffusion\dataset\raw --datasets CRW_tRNA
+python scripts/download_datasets.py --raw-root D:\RNA-OmniPrefold\dataset\raw --datasets CRW_tRNA
 
 # Manual: download a single isoacceptor
 python -c "
@@ -134,7 +134,7 @@ wget https://zenodo.org/records/15319168/files/rna_test.csv
 
 ### Preprocessing
 
-RNASSTR uses CSV format. Convert to JSONL for RNA-OmniDiffusion:
+RNASSTR uses CSV format. Convert to JSONL for RNA-OmniPrefold:
 
 ```python
 # scripts/convert_rnasstr.py (rubust conversion with error handling)
@@ -142,7 +142,7 @@ import csv, json, sys
 from pathlib import Path
 
 def convert_rnasstr_csv(csv_path: Path, jsonl_path: Path, maxlen: int = 512):
-    """Convert RNASSTR CSV to RNA-OmniDiffusion JSONL format."""
+    """Convert RNASSTR CSV to RNA-OmniPrefold JSONL format."""
     count = 0
     skipped = 0
     with open(csv_path) as src, open(jsonl_path, 'w') as dst:
@@ -252,7 +252,7 @@ Alternatively, use the JSON metadata which includes Rfam family assignments for 
 - **OOD splits**: GenA (novel architecture), GenC (novel clan), GenF (novel family)
 - **Format**: Parquet (id, sequence, secondary_structure, split)
 - **Structure**: Dot-bracket notation via bpRNA standard
-- **Benchmarked**: 29 predictors including RNA-FM, RiNALMo, UFold, MXFold2, SPOT-RNA
+- **Benchmarked**: 29 predictors including public RNA structure and representation models.
 - **Paper**: Chen et al. 2026, arXiv:2603.22330
 
 ### Download
@@ -551,7 +551,7 @@ Add the following entries to the `DATASETS` dict in `scripts/download_datasets.p
 
 ```bash
 python scripts/download_datasets.py \
-    --raw-root D:\RNA-OmniDiffusion\dataset\raw \
+    --raw-root D:\RNA-OmniPrefold\dataset\raw \
     --datasets CRW_tRNA RNASSTR SRPDB RIVAS
 ```
 

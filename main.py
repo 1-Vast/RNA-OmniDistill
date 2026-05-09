@@ -1,4 +1,4 @@
-"""RNA-OmniDistill CLI -- research entry window.
+"""RNA-OmniPrefold CLI -- research entry window.
 
 Relational Masked Diffusion for Constraint-Guided RNA Folding:
   Core        Transformer student encoder over RNA tokens.
@@ -20,7 +20,7 @@ from typing import Any
 
 MODE_REGISTRY: dict[str, dict[str, str]] = {
     "overview": {
-        "purpose": "Print the RNA-OmniDistill framework map.",
+        "purpose": "Print the RNA-OmniPrefold framework map.",
         "input": "none.",
         "output": "human-readable framework description.",
         "typical": "python main.py overview",
@@ -32,7 +32,7 @@ MODE_REGISTRY: dict[str, dict[str, str]] = {
         "typical": "python main.py models",
     },
     "train": {
-        "purpose": "Train RNA-OmniDistill from a YAML config.",
+        "purpose": "Train RNA-OmniPrefold from a YAML config.",
         "input": "config YAML + dataset JSONL.",
         "output": "trainlog.jsonl, best.pt, last.pt.",
         "typical": "python main.py train --config config/candidate.yaml --device cuda",
@@ -114,15 +114,15 @@ PARAM_REGISTRY: dict[str, list[tuple[str, str, str]]] = {
 
 
 OVERVIEW_TEXT = """\
-RNA-OmniDistill
-Relational Masked Diffusion for Constraint-Guided RNA Folding
+RNA-OmniPrefold
+Relation-aware Masked Denoising for Constraint-Guided RNA Folding
 
 Pipeline:
 1. sequence-only masked nucleotide denoising
-2. frozen RNA-FM sequence-level distillation
-3. supervised pair-relation adaptation
-4. lightweight 2D relation refinement
-5. strict Nussinov constraint projection
+2. supervised pair-relation field prediction
+3. lightweight 2D relation refinement
+4. strict Nussinov constraint projection
+5. planned offline preference optimization
 
 [Core]
   RNAOmniDiffusion
@@ -137,14 +137,13 @@ Pipeline:
 
 [Training Stages]
   Stage 1  Sequence-only masked nucleotide denoising.
-  Stage 1  Frozen RNA-FM sequence-level representation distillation.
   Stage 2  Supervised pair-relation prediction with pair-logit relation head.
   Stage 2  Optional token auxiliary objective when enabled by config.
   Stage 3  Strict Nussinov projection with canonical pair and loop constraints.
 
-[Teacher Boundary]
-  RNA-FM is frozen and used only as a sequence-level representation teacher.
-  It does not predict dot-bracket structures, generate pair labels, or run at benchmark inference.
+[Planned Preference Boundary]
+  Offline preference critics may compare candidate structures during training data preparation.
+  They do not predict dot-bracket truth, generate pair labels, or run inside model forward.
 
 [Recommended Workflow]
   1. python main.py smoke
@@ -241,7 +240,7 @@ def _run_infer(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="RNA-OmniDistill -- relational masked diffusion for constraint-guided RNA folding",
+        description="RNA-OmniPrefold -- relation-aware masked denoising for constraint-guided RNA folding",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command", required=True)

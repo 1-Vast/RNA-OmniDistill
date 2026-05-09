@@ -1,16 +1,15 @@
-"""Generate experiment YAML configs for RNA-OmniDistill experiments."""
+"""Generate compact RNA-OmniPrefold sequence-pretraining configs."""
+
+from __future__ import annotations
+
 import argparse
-import os
 from pathlib import Path
 
 import yaml
 
-TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "config"
 
-
-def make_donly_pretrain(train_jsonl, val_jsonl, seed, epochs, output_dir):
-    """D-only pretrain config: no teacher."""
-    config = {
+def make_pretrain(train_jsonl: str, val_jsonl: str, seed: int, epochs: int, output_dir: str) -> dict:
+    return {
         "data": {
             "train_jsonl": train_jsonl,
             "val_jsonl": val_jsonl,
@@ -30,9 +29,6 @@ def make_donly_pretrain(train_jsonl, val_jsonl, seed, epochs, output_dir):
             "num_heads": 8,
             "dropout": 0.1,
             "max_position_embeddings": 2048,
-            "use_distill_head": False,
-            "teacher_dim": 640,
-            "distill_pool": "mean",
         },
         "training": {
             "batch_size": 64,
@@ -43,7 +39,6 @@ def make_donly_pretrain(train_jsonl, val_jsonl, seed, epochs, output_dir):
             "lambda_seq": 1.0,
             "lambda_struct": 0.0,
             "lambda_pair": 0.0,
-            "lambda_distill": 0.0,
             "grad_clip": 1.0,
             "amp": True,
             "seed": seed,
@@ -67,20 +62,10 @@ def make_donly_pretrain(train_jsonl, val_jsonl, seed, epochs, output_dir):
             "use_family_condition": False,
         },
     }
-    return config
 
 
-def make_drnafm_pretrain(train_jsonl, val_jsonl, seed, epochs, output_dir):
-    """D-RNAFM pretrain config: with teacher distillation."""
-    config = make_donly_pretrain(train_jsonl, val_jsonl, seed, epochs, output_dir)
-    config["model"]["use_distill_head"] = True
-    config["training"]["lambda_distill"] = 0.05
-    return config
-
-
-def make_finetune(pretrain_dir, output_dir, seed, epochs=20):
-    """Fine-tune config: encoder-only from pretrain."""
-    config = {
+def make_finetune(pretrain_dir: str, output_dir: str, seed: int, epochs: int = 20) -> dict:
+    return {
         "data": {
             "train_jsonl": "dataset/archive/train.jsonl",
             "val_jsonl": "dataset/archive/val.jsonl",
@@ -161,82 +146,46 @@ def make_finetune(pretrain_dir, output_dir, seed, epochs=20):
         },
         "debug": {"check_pair_batch": False},
     }
-    return config
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Generate RNA-OmniDistill experiment configs"
-    )
-    parser.add_argument("--name", required=True, help="Experiment name (e.g., rfam50k, bprna50k)")
+def write_yaml(path: Path, config: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate RNA-OmniPrefold experiment configs")
+    parser.add_argument("--name", required=True, help="Experiment name, e.g. rfam50k")
     parser.add_argument("--train_jsonl", required=True)
     parser.add_argument("--val_jsonl", required=True)
-    parser.add_argument("--teacher_train_jsonl", default="")
-    parser.add_argument("--teacher_val_jsonl", default="")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--epochs_pretrain", type=int, default=5)
     parser.add_argument("--epochs_finetune", type=int, default=20)
     parser.add_argument("--output_prefix", default="outputs")
     args = parser.parse_args()
 
-    prefix = args.output_prefix
-    seed = args.seed
-
-    # 1) D-only pretrain
-    d_only_name = f"seq_pretrain_{args.name}_seed{seed}"
-    d_only_config = make_donly_pretrain(
+    pretrain_name = f"seq_pretrain_{args.name}_seed{args.seed}"
+    pretrain_config = make_pretrain(
         args.train_jsonl,
         args.val_jsonl,
-        seed,
+        args.seed,
         args.epochs_pretrain,
-        f"{prefix}/{d_only_name}",
+        f"{args.output_prefix}/{pretrain_name}",
     )
-    out_path = Path(f"config/{d_only_name}.yaml")
-    out_path.parent.mkdir(exist_ok=True)
-    with open(out_path, "w") as f:
-        yaml.dump(d_only_config, f, sort_keys=False)
-    print(f"Wrote {out_path}")
+    pretrain_path = Path(f"config/{pretrain_name}.yaml")
+    write_yaml(pretrain_path, pretrain_config)
+    print(f"Wrote {pretrain_path}")
 
-    # 2) D-only fine-tune
-    d_only_ft_name = f"candidate_from_seq_pretrain_{args.name}_seed{seed}"
-    d_only_ft_config = make_finetune(
-        f"{prefix}/{d_only_name}",
-        f"{prefix}/{d_only_ft_name}",
-        seed,
+    finetune_name = f"candidate_from_seq_pretrain_{args.name}_seed{args.seed}"
+    finetune_config = make_finetune(
+        f"{args.output_prefix}/{pretrain_name}",
+        f"{args.output_prefix}/{finetune_name}",
+        args.seed,
         args.epochs_finetune,
     )
-    out_path = Path(f"config/{d_only_ft_name}.yaml")
-    with open(out_path, "w") as f:
-        yaml.dump(d_only_ft_config, f, sort_keys=False)
-    print(f"Wrote {out_path}")
-
-    # 3) D-RNAFM pretrain (only if teacher data provided)
-    if args.teacher_train_jsonl and args.teacher_val_jsonl:
-        drnafm_name = f"seq_pretrain_rnafm_{args.name}_seed{seed}"
-        drnafm_config = make_drnafm_pretrain(
-            args.teacher_train_jsonl,
-            args.teacher_val_jsonl,
-            seed,
-            args.epochs_pretrain,
-            f"{prefix}/{drnafm_name}",
-        )
-        out_path = Path(f"config/{drnafm_name}.yaml")
-        with open(out_path, "w") as f:
-            yaml.dump(drnafm_config, f, sort_keys=False)
-        print(f"Wrote {out_path}")
-
-        # 4) D-RNAFM fine-tune
-        drnafm_ft_name = f"candidate_from_rnafm_pretrain_{args.name}_seed{seed}"
-        drnafm_ft_config = make_finetune(
-            f"{prefix}/{drnafm_name}",
-            f"{prefix}/{drnafm_ft_name}",
-            seed,
-            args.epochs_finetune,
-        )
-        out_path = Path(f"config/{drnafm_ft_name}.yaml")
-        with open(out_path, "w") as f:
-            yaml.dump(drnafm_ft_config, f, sort_keys=False)
-        print(f"Wrote {out_path}")
+    finetune_path = Path(f"config/{finetune_name}.yaml")
+    write_yaml(finetune_path, finetune_config)
+    print(f"Wrote {finetune_path}")
 
 
 if __name__ == "__main__":

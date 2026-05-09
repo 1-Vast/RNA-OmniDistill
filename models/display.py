@@ -73,7 +73,7 @@ def train_startup(config: dict, device_str: str, gpu_name: str) -> None:
         ("Nussinov", str(config.get("decoding", {}).get("use_nussinov", "?"))),
         ("Save best by", str(training.get("save_best_by", "?"))),
     ]
-    banner("RNA-OmniDiffusion Training")
+    banner("RNA-OmniPrefold Training")
     key_value_table(items)
     sep()
 
@@ -161,7 +161,7 @@ def inference_header(
         ("Config", config_path),
         ("Device", device),
     ]
-    print("RNA-OmniDiffusion Inference")
+    print("RNA-OmniPrefold Inference")
     key_value_table(items)
 
 
@@ -186,7 +186,7 @@ def inference_result_invfold(
 def overview_text() -> str:
     """Return the framework overview description string."""
     return (
-        "RNA-OmniDistill Framework Overview\n"
+        "RNA-OmniPrefold Framework Overview\n"
         "\n"
         "Core model:\n"
         "  RNAOmniDiffusion\n"

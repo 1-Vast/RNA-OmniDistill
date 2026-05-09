@@ -1,8 +1,8 @@
-"""One-shot data processing: bpRNA + RNAcentral for RNA-OmniDistill experiments."""
+"""One-shot data processing: bpRNA + RNAcentral for RNA-OmniPrefold experiments."""
 import gzip, json, random, os, sys
 from pathlib import Path
 
-REPO = Path("/root/autodl-tmp/RNA-OmniDiffusion")
+REPO = Path(__file__).resolve().parents[1]
 
 
 def clean_seq(seq):
@@ -221,7 +221,7 @@ def process_rnacentral(limit=50000):
 
 
 if __name__ == "__main__":
-    print("RNA-OmniDistill Data Processing Pipeline")
+    print("RNA-OmniPrefold Data Processing Pipeline")
     print(f"REPO: {REPO}")
     print()
 

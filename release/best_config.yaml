@@ -1,4 +1,4 @@
-# RNA-OmniDiffusion Best Candidate Configuration
+# RNA-OmniPrefold Best Candidate Configuration
 # This is the current best-performing model configuration.
 # Achieves Pair F1=0.5689 on ArchiveII and F1=0.5285 on bpRNA (12,732 samples).
 

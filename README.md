@@ -1,32 +1,16 @@
-# RNA-OmniDistill
+# RNA-OmniPrefold
 
-**Relational Masked Diffusion with Frozen RNA-FM Distillation for Constraint-Guided RNA Folding**
+Relation-aware Masked Denoising for Constraint-Guided RNA Folding.
 
-[![Framework](https://img.shields.io/badge/method-Relational_Masked_Diffusion-blue)]()
-[![Stage](https://img.shields.io/badge/stage-research-orange)]()
-[![Domain](https://img.shields.io/badge/domain-RNA_secondary_structure-green)]()
+RNA-OmniPrefold is a compact RNA secondary-structure prediction framework. It learns sequence and structure denoising tasks, predicts a pair-relation field, refines that field with a lightweight 2D module, and projects final scores into valid dot-bracket structures with strict Nussinov decoding.
 
-RNA-OmniDistill is a **relational masked diffusion framework** for RNA secondary structure prediction. It formulates RNA folding as **joint discrete denoising over sequence tokens, structure tokens, and pair-relation tokens**. A compact student encoder is pretrained on sequence-only RNA data using masked nucleotide denoising, with optional **frozen RNA-FM sequence-level representation distillation**. The pretrained encoder is then adapted to **supervised pair-relation adaptation** via a pair-relation head and lightweight 2D relation refinement. Final structures are obtained through **strict Nussinov constraint projection** into valid non-crossing dot-bracket space.
+## Core Modules
 
-## Core Innovation
-
-RNA-OmniDistill introduces three key ideas:
-
-1. **Relational Masked Diffusion**: RNA folding is cast as joint denoising over sequence, structure, and pair-relation tokens — explicitly modeling base-pair interactions as relational variables in the diffusion process.
-
-2. **Frozen RNA-FM Sequence-Level Distillation**: A frozen RNA-FM model provides global sequence representation guidance during unsupervised pretraining, without predicting structures, generating pseudo labels, or participating in inference.
-
-3. **Constraint-Guided Relation Projection**: Predicted soft pair-relation fields are projected into valid structures via strict Nussinov dynamic programming, satisfying non-crossing, minimum loop length, and canonical/wobble pairing constraints.
-
-## Overview
-
-The model architecture:
-
-- **nucleotide tokens** for RNA sequence denoising
-- **structure tokens** for task-conditioned folding paths
-- **pair-relation tokens** for explicit base-pair supervision
-- **pair-relation field** refined by lightweight 2D convolution
-- **strict Nussinov projection** for guaranteed valid structures
+1. **Relation-aware masked denoising**: joint sequence, structure, and task-conditioned token denoising.
+2. **Pair-relation field prediction**: a pair-logit head learns base-pair relations over sequence positions.
+3. **Lightweight 2D relation refinement**: local convolutional refinement over pair logits.
+4. **Strict Nussinov projection**: canonical/wobble, loop-length, and non-crossing constraints at decode time.
+5. **Planned extension**: LLM-guided preference optimization is planned as an optional training-time preference critic. It is not part of the default model until validated.
 
 ## Method Stages
 
@@ -34,14 +18,11 @@ The model architecture:
 
 - input: unlabeled RNA sequence
 - objective: masked nucleotide denoising
-- optional teacher: frozen RNA-FM sequence-level representation distillation
 - no structural labels
 - no pseudo pairs
 
-The pretraining loss is:
-
 ```text
-L_pretrain = L_denoise + lambda_d * L_distill
+L_pretrain = L_denoise
 ```
 
 ### Stage 2: Supervised Pair-Relation Adaptation
@@ -50,9 +31,7 @@ L_pretrain = L_denoise + lambda_d * L_distill
 - pair-logit relation head
 - pair-relation BCE / weighted pair loss
 - lightweight 2D relation refinement
-- optional token auxiliary objective when enabled by the config
-
-The fine-tuning loss is:
+- optional token auxiliary objective when enabled by config
 
 ```text
 L_finetune = L_pair + optional token auxiliary
@@ -60,61 +39,26 @@ L_finetune = L_pair + optional token auxiliary
 
 ### Stage 3: Strict Nussinov Decoding
 
-- canonical base-pair constraints
+- canonical/wobble base-pair constraints
 - minimum loop length
 - non-crossing dynamic programming projection
 - final dot-bracket structure output
 
-## RNA-FM Teacher Boundary
+## Planned Preference Boundary
 
-RNA-FM does:
+The planned LLM-guided preference path will be offline and optional:
 
-- serve as a frozen sequence-level representation teacher
-- provide a continuous prior for sequence-only pretraining
-- produce one mean-pooled embedding vector per sequence
+- compare candidate structures as a preference critic
+- output preferred/rejected candidates
+- convert preference into pair-level ranking loss
 
-RNA-FM does not:
+It will not:
 
-- predict dot-bracket structures
-- generate pair labels
-- participate in benchmark inference
-- replace RNA-OmniDistill
-
-Offline teacher extraction writes mean-pooled embeddings to ignored local files:
-
-```bash
-python scripts/extract_rnafm_embeddings.py --input dataset/archive/train.jsonl --output_jsonl dataset/unlabeled/train_seq_rnafm.jsonl --output_npy dataset/teacher_emb/rnafm/train_embeddings.npy --dummy --limit 256 --embedding_dim 640 --overwrite
-python scripts/extract_rnafm_embeddings.py --input dataset/archive/val.jsonl --output_jsonl dataset/unlabeled/val_seq_rnafm.jsonl --output_npy dataset/teacher_emb/rnafm/val_embeddings.npy --dummy --limit 64 --embedding_dim 640 --overwrite
-```
-
-Use `--dummy` only for pipeline smoke tests. Real RNA-FM loading is isolated in `models/teacher/rnafm_teacher.py`; the core student model does not import external RNA-FM code.
-
-## Preliminary Results (2026-05, Seed 42)
-
-All results on ArchiveII test split, strict Nussinov constraint projection:
-
-| Pretrain Source | Teacher | Pair F1 | Precision | Recall | Δ Baseline |
-|---|---:|---:|---:|---:|---:|
-| None (supervised) | — | 0.5762 | 0.5324 | 0.6302 | — |
-| Rfam 50k | — | 0.5925 | 0.5499 | 0.6463 | +1.63pp |
-| Rfam 50k | RNA-FM | 0.5969 | 0.5504 | 0.6556 | +2.07pp |
-| bpRNA 50k | RNA-FM | 0.5998 | 0.5561 | 0.6546 | +2.36pp |
-| **RNAcentral 50k** | **RNA-FM** | **0.6171** | **0.5794** | **0.6640** | **+4.09pp** |
-
-These are single-run results. Seed repeats and external benchmarks are needed before claiming stable improvements.
-
-## Experiment Paths
-
-- baseline supervised candidate
-- D-only sequence pretraining (no teacher)
-- D-RNAFM frozen RNA-FM distillation
-- Cross-source pretraining: Rfam / bpRNA / RNAcentral
-- Seed repeat (42, 43, 44, 45, 46, 47)
-- External benchmark (bpRNA-1m(90))
-- Relation refinement ablation
-- Low-label adaptation
-
-See [docs/experiment_plan.md](docs/experiment_plan.md) for the full experiment matrix.
+- predict dot-bracket truth
+- generate pair labels as strong supervision
+- enter model forward
+- be required for inference
+- generate semantic tokens or pseudo-structure labels
 
 ## Quick Start
 
@@ -125,20 +69,12 @@ python main.py params --config config/candidate.yaml
 python main.py train --config config/candidate.yaml --device cuda
 python main.py train --config config/seq_pretrain.yaml --device cuda
 python main.py train --config config/candidate_from_seq_pretrain.yaml --device cuda
-python main.py train --config config/seq_pretrain_rnafm.yaml --device cuda
-python main.py train --config config/candidate_from_rnafm_pretrain.yaml --device cuda
 ```
 
 Strict Nussinov benchmark:
 
 ```bash
 python scripts/eval.py bench --config config/candidate.yaml --ckpt outputs/candidate/best.pt --split test --device cuda --decode nussinov --stage_logits --workers 8 --chunksize 2 --profile
-```
-
-External bpRNA comparison:
-
-```bash
-python scripts/run.py external --configs config/candidate.yaml --dataset bprna --split random --device cuda --decode nussinov --bench_workers 8 --tag external_bprna
 ```
 
 ## Core Structure
@@ -151,9 +87,7 @@ models/
   dataset.py
   collator.py
   decode.py
-  teacher/rnafm_teacher.py
 scripts/
-  extract_rnafm_embeddings.py
   data.py
   eval.py
   run.py
@@ -162,11 +96,9 @@ config/
   candidate.yaml
   seq_pretrain.yaml
   candidate_from_seq_pretrain.yaml
-  seq_pretrain_rnafm.yaml
-  candidate_from_rnafm_pretrain.yaml
 docs/
-  rna_omnidistill.md
   dataset_processing_and_splits.md
+  negative.md
   usage.md
 ```
 
@@ -177,33 +109,25 @@ Data processing and experiment split notes are in [docs/dataset_processing_and_s
 Important local artifacts are ignored by git:
 
 - `outputs/`
-- `dataset/unlabeled/`
-- `dataset/teacher_emb/`
-- large `dataset/processed/` files
+- `dataset/`
+- `checkpoints/`
 - checkpoints and tensor dumps (`*.pt`, `*.pth`, `*.ckpt`, `*.npy`, `*.safetensors`)
-- `external/model.safetensors`
 - `.env`
 
 ## What Not To Claim
 
-- Not an LLM-powered predictor.
-- Does not use LLM semantic tokens in the mainline.
-- Does not use token-level RNA-FM distillation.
-- Does not use RNA-FM pair priors.
-- Does not use RNA-FM or LLM pseudo-structure labels.
-- Does not use an Agent during training or inference.
-- Not a foundation model.
-- Not RNA-FM structure prediction.
+- Not a language-model-powered predictor.
+- Does not use language-model-generated semantic tokens in the mainline.
+- Does not use pseudo-structure labels.
+- Does not use an agent during training or inference.
+- Not a general RNA foundation model.
 
 ## Negative Results
 
-See [docs/negative_results.md](docs/negative_results.md) for excluded experimental branches, including LLM semantic conditioning, token-only decode, greedy decode as final metric, conflict loss, and masking variants.
-- no pseudo pair labels
-- no RNA-FM structural prior
+See [docs/negative.md](docs/negative.md) for excluded experimental branches and rationale.
 
 ## Current Limitations
 
 - Precision is still lower than recall in the current candidate path.
 - Family-disjoint generalization is not established as a final claim.
-- RNA-FM distillation requires seed repeats and larger unlabeled pretraining before being treated as stable evidence.
 - Strict Nussinov projection is part of the system, not an optional post-hoc decoration.

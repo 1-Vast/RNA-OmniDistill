@@ -1,4 +1,4 @@
-# RNA-OmniDiffusion Candidate Reproduction Guide
+# RNA-OmniPrefold Candidate Reproduction Guide
 
 ## Environment
 

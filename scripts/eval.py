@@ -1156,7 +1156,7 @@ def run_compare(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate RNA-OmniDiffusion.")
+    parser = argparse.ArgumentParser(description="Evaluate RNA-OmniPrefold.")
     sub = parser.add_subparsers(dest="cmd", required=True)
     bench = sub.add_parser("bench")
     bench.add_argument("--config", default="config/candidate.yaml")

@@ -1,10 +1,9 @@
-# Stage 2 (D-only): Supervised pair-refined structure adaptation from D-only pretrained encoder
-# RNA-OmniDistill ablation baseline
-# - Initialized from D-only Stage 1 encoder checkpoint
+# Stage 2: Supervised pair-refined structure adaptation from sequence-pretrained encoder
+# RNA-OmniPrefold adaptation config
+# - Initialized from Stage 1 sequence-denoising encoder checkpoint
 # - Input: labeled RNA secondary structures
 # - Task: base-pair matrix prediction with pair-refined Nussinov decoding
 # - Loss: L_finetune = L_token + lambda_pair * L_pair
-# - Purpose: Compare D-only vs D-RNAFM to isolate distillation contribution
 
 data:
   train_jsonl: dataset/archive/train.jsonl

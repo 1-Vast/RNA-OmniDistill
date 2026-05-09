@@ -183,7 +183,7 @@ DATASETS: Dict[str, Dict[str, Any]] = {
 # Network helpers
 # ---------------------------------------------------------------------------
 
-HTTP_CLIENT_NAME = "RNA-OmniDiffusion-downloader/1.0"
+HTTP_CLIENT_NAME = "RNA-OmniPrefold-downloader/1.0"
 
 
 def _make_ssl_context() -> ssl.SSLContext:

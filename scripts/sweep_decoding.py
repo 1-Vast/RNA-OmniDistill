@@ -1,4 +1,4 @@
-"""Decoding hyperparameter sweep tool for RNA-OmniDiffusion.
+"""Decoding hyperparameter sweep tool for RNA-OmniPrefold.
 
 Loads a checkpoint and sweeps decoding parameters on a validation split
 without retraining. Outputs scan results, Pareto frontier, and best config.
@@ -62,7 +62,7 @@ def _pareto_frontier(results: List[dict], metric_keys: Sequence[str]) -> List[di
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="RNA-OmniDiffusion decoding hyperparameter sweep",
+        description="RNA-OmniPrefold decoding hyperparameter sweep",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--config", default="config/candidate.yaml", help="YAML config")

@@ -1,4 +1,4 @@
-"""Local dataset metadata checker for RNA-OmniDiffusion.
+"""Local dataset metadata checker for RNA-OmniPrefold.
 
 Checks dataset existence, file counts, sizes, and manifest status
 without reading large file contents. Also supports comparing two
@@ -153,7 +153,7 @@ def write_report(out_dir: Path, data: dict, stem: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="RNA-OmniDiffusion dataset metadata checker"
+        description="RNA-OmniPrefold dataset metadata checker"
     )
     sub = parser.add_subparsers(dest="mode", required=True)
 

@@ -304,7 +304,7 @@ def run_audit(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Collator/masking statistics audit tool for RNA-OmniDiffusion."
+        description="Collator/masking statistics audit tool for RNA-OmniPrefold."
     )
     parser.add_argument(
         "--config", required=True, type=str,

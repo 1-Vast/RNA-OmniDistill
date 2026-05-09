@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import random
-from pathlib import Path
 from typing import Dict, List, Sequence
 
-import numpy as np
 import torch
 
 from models.token import RNAOmniTokenizer
@@ -38,7 +36,6 @@ class RNAOmniCollator:
         self.use_motif_span_masking = bool(self.ablation.get("use_motif_span_masking", True))
         self.use_motif_condition = bool(self.ablation.get("use_motif_condition", True))
         self.use_family_condition = bool(self.ablation.get("use_family_condition", True))
-        self._teacher_cache: dict[str, np.ndarray] = {}  # Cache for sequence-level teacher embeddings; teacher provides one vector per sequence
         ratios = dict(task_ratios)
         if "seq_denoise" in ratios and "denoise" not in ratios:
             ratios["denoise"] = ratios["seq_denoise"]
@@ -69,7 +66,6 @@ class RNAOmniCollator:
         pair_mask = torch.zeros((len(examples), max_len, max_len), dtype=torch.bool)
         pair_positive_counts = torch.zeros(len(examples), dtype=torch.long)
         pair_negative_counts = torch.zeros(len(examples), dtype=torch.long)
-        teacher_embedding, teacher_mask = self._load_teacher_embeddings(examples)  # Load sequence-level frozen teacher embedding per sample (NOT token-level)
         is_labeled = torch.tensor([bool(example.get("is_labeled", True)) for example in examples], dtype=torch.bool)
 
         for batch_idx, example in enumerate(examples):
@@ -112,52 +108,10 @@ class RNAOmniCollator:
             "raw_seq": [example["raw_seq"] for example in examples],
             "raw_struct": [example["raw_struct"] for example in examples],
             "raw_pairs": [example["pairs"] for example in examples],
+            "sample_ids": [example["sample_id"] for example in examples],
             "is_labeled": is_labeled,
-            "teacher_mask": teacher_mask,
         }
-        if teacher_embedding is not None:
-            batch["teacher_embedding"] = teacher_embedding
         return batch
-
-    def _load_teacher_embeddings(self, examples: Sequence[dict]) -> tuple[torch.Tensor | None, torch.Tensor]:
-        has_teacher = [
-            bool(example.get("teacher_embedding"))
-            or bool(example.get("teacher_embedding_file") and example.get("teacher_embedding_index") is not None)
-            for example in examples
-        ]
-        teacher_mask = torch.tensor(has_teacher, dtype=torch.bool)
-        if not any(has_teacher):
-            return None, teacher_mask
-        arrays = []
-        expected_dim = None
-        for example, present in zip(examples, has_teacher):
-            if not present:
-                if expected_dim is None:
-                    expected_dim = self._infer_teacher_dim(examples)
-                arrays.append(np.zeros((expected_dim,), dtype="float32"))
-                continue
-            if example.get("teacher_embedding"):
-                array = np.load(Path(example["teacher_embedding"]), mmap_mode="r").astype("float32")
-            else:
-                matrix_path = str(example["teacher_embedding_file"])
-                matrix = self._teacher_cache.get(matrix_path)
-                if matrix is None:
-                    matrix = np.load(Path(matrix_path), mmap_mode="r")
-                    self._teacher_cache[matrix_path] = matrix
-                array = np.asarray(matrix[int(example["teacher_embedding_index"])], dtype="float32")
-            if array.ndim != 1:
-                raise ValueError("teacher embedding must be a 1D vector.")
-            expected_dim = expected_dim or int(array.shape[0])
-            if int(array.shape[0]) != expected_dim:
-                raise ValueError("teacher embedding dimensions differ within one batch.")
-            arrays.append(array)
-        return torch.tensor(np.stack(arrays), dtype=torch.float32), teacher_mask
-
-    def _infer_teacher_dim(self, examples: Sequence[dict]) -> int:
-        for example in examples:
-            if example.get("teacher_embedding_dim"):
-                return int(example["teacher_embedding_dim"])
-        raise ValueError("Batch mixes teacher and non-teacher samples without teacher_embedding_dim.")
 
     def _build_example(self, sample: dict, task_name: str, time_step: float, mask_ratio: float) -> dict:
         tokens: List[str] = []
@@ -225,10 +179,7 @@ class RNAOmniCollator:
             "length": sample["length"],
             "raw_seq": sample["seq"],
             "raw_struct": sample["struct"] if sample.get("is_labeled", True) else "",
-            "teacher_embedding": sample.get("teacher_embedding"),
-            "teacher_embedding_file": sample.get("teacher_embedding_file"),
-            "teacher_embedding_index": sample.get("teacher_embedding_index"),
-            "teacher_embedding_dim": sample.get("teacher_embedding_dim"),
+            "sample_id": sample.get("id", ""),
             "is_labeled": sample.get("is_labeled", True),
         }
 

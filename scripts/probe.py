@@ -29,7 +29,7 @@ def real(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Probe compact RNA-OmniDiffusion behavior.")
+    parser = argparse.ArgumentParser(description="Probe compact RNA-OmniPrefold behavior.")
     sub = parser.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("smoke")
     s.set_defaults(func=smoke)

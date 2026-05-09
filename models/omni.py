@@ -22,12 +22,7 @@ class PairRefineBlock(nn.Module):
 
 
 class RNAOmniDiffusion(nn.Module):
-    """Minimal masked discrete diffusion model for RNA sequence/structure tasks.
-
-    Distill_head (if enabled): Projects encoder hidden states to match frozen RNA-FM
-    teacher dimension for sequence-level distillation. The teacher provides mean-pooled
-    embeddings only — no token-level or pair-level signals.
-    """
+    """RNA-OmniPrefold relation-aware masked denoising model for RNA folding."""
 
     def __init__(
         self,
@@ -51,10 +46,6 @@ class RNAOmniDiffusion(nn.Module):
         pairrefinechannels: int = 16,
         pairrefineblocks: int = 1,
         pairrefinedrop: float = 0.0,
-        distill_dim: int | None = None,
-        use_distill_head: bool = False,
-        teacher_dim: int = 640,
-        distill_pool: str = "mean",
     ) -> None:
         super().__init__()
         self.vocab_size = vocab_size
@@ -66,9 +57,6 @@ class RNAOmniDiffusion(nn.Module):
         self.distbuckets = int(distbuckets)
         self.distmax = int(distmax)
         self.pairrefine = bool(pairrefine)
-        self.teacher_dim = int(distill_dim or teacher_dim)
-        self.use_distill_head = bool(use_distill_head or distill_dim)
-        self.distill_pool = str(distill_pool)
         self.token_embedding = nn.Embedding(vocab_size, hidden_size)
         self.position_embedding = nn.Embedding(max_position_embeddings, hidden_size)
         self.segment_embedding = nn.Embedding(num_segments, hidden_size)
@@ -92,15 +80,6 @@ class RNAOmniDiffusion(nn.Module):
         self.sequence_head = nn.Linear(hidden_size, vocab_size)
         self.structure_head = nn.Linear(hidden_size, vocab_size)
         self.general_head = nn.Linear(hidden_size, vocab_size)
-        self.distill_head = (
-            nn.Sequential(
-                nn.Linear(hidden_size, hidden_size),
-                nn.GELU(),
-                nn.Linear(hidden_size, self.teacher_dim),
-            )
-            if self.use_distill_head
-            else None
-        )
         if self.use_pair_head:
             pairhidden = int(pairhidden or hidden_size)
             if self.pairhead not in {"bilinear", "mlp", "pairmlp"}:
@@ -177,8 +156,6 @@ class RNAOmniDiffusion(nn.Module):
         pair_logits = None
         if self.use_pair_head and seq_positions is not None:
             pair_logits = self._pair_logits(encoded, seq_positions)
-        student_embedding = self._student_embedding(encoded, attention_mask) if self.distill_head is not None else None
-
         return {
             "hidden_states": encoded,
             "token_logits": token_logits,
@@ -186,16 +163,7 @@ class RNAOmniDiffusion(nn.Module):
             "structure_logits": structure_logits,
             "general_logits": general_logits,
             "pair_logits": pair_logits,
-            "student_embedding": student_embedding,
         }
-
-    def _student_embedding(self, hidden: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        # Sequence-level mean-pooled student embedding for distillation (matches teacher's mean-pooled output)
-        if self.distill_pool != "mean":
-            raise ValueError("Only mean distillation pooling is supported.")
-        valid = attention_mask.float().unsqueeze(-1)
-        pooled = (hidden * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
-        return self.distill_head(pooled)
 
     def _pair_logits(self, hidden: torch.Tensor, seq_positions: torch.Tensor) -> torch.Tensor:
         gather_positions = seq_positions.clamp_min(0)
@@ -309,8 +277,6 @@ def compute_omni_loss(
     pair_pos_weight: torch.Tensor | float | None = None,
     use_pair_loss: bool = True,
     pair_options: dict | None = None,
-    lambda_distill: float = 0.0,
-    distill_loss_type: str = "mse",
 ) -> Dict[str, torch.Tensor]:
     token_logits = outputs["token_logits"]
     labels = batch["labels"].to(token_logits.device)
@@ -335,7 +301,6 @@ def compute_omni_loss(
     pair_logits = outputs.get("pair_logits")
     pair_loss = token_loss.new_zeros(())
     conflict_loss = token_loss.new_zeros(())
-    distill_loss = token_loss.new_zeros(())
     mean_row_sum = token_loss.new_zeros(())
     max_row_sum = token_loss.new_zeros(())
     pair_options = pair_options or {}
@@ -390,22 +355,7 @@ def compute_omni_loss(
     lambda_conflict = float(pair_options.get("lambdaConflict", 0.0))
     if use_pair_loss and pair_logits is not None and lambda_conflict > 0.0:
         conflict_loss, mean_row_sum, max_row_sum = _conflict_loss(pair_logits, lengths, pair_options)
-    teacher_embedding = batch.get("teacher_embedding")
-    student_embedding = outputs.get("student_embedding")
-    teacher_mask = batch.get("teacher_mask")
-    teacher_mask_ratio = token_loss.new_zeros(())
-    if float(lambda_distill) > 0.0 and teacher_embedding is not None and student_embedding is not None:
-        mask = teacher_mask.to(student_embedding.device).bool() if teacher_mask is not None else torch.ones(student_embedding.size(0), dtype=torch.bool, device=student_embedding.device)
-        teacher_mask_ratio = mask.float().mean()
-        if mask.any():
-            student = F.normalize(student_embedding[mask], dim=-1)
-            teacher = F.normalize(teacher_embedding.to(student_embedding.device).to(student_embedding.dtype)[mask], dim=-1)
-            if str(distill_loss_type).lower() == "cosine":
-                distill_loss = (1.0 - F.cosine_similarity(student, teacher, dim=-1)).mean()
-            else:
-                distill_loss = F.mse_loss(student, teacher)
-
-    total = token_loss + float(lambda_pair) * pair_loss + lambda_conflict * conflict_loss + float(lambda_distill) * distill_loss
+    total = token_loss + float(lambda_pair) * pair_loss + lambda_conflict * conflict_loss
     pair_stats["pos_pair_count"] = pair_stats["pos"]
     pair_stats["neg_pair_count"] = pair_stats["neg"]
     pair_stats["pair_positive_weight_used"] = pair_stats["weight"]
@@ -420,9 +370,6 @@ def compute_omni_loss(
         "token_loss": token_loss.detach(),
         "pair_loss": pair_loss.detach(),
         "conflict_loss": conflict_loss.detach(),
-        "distill_loss": distill_loss.detach(),
-        "lambda_distill": token_loss.new_tensor(float(lambda_distill)),
-        "teacher_mask_ratio": teacher_mask_ratio.detach(),
         "lambdaConflict": token_loss.new_tensor(lambda_conflict),
         "mean_row_pair_prob_sum": mean_row_sum.detach(),
         "max_row_pair_prob_sum": max_row_sum.detach(),

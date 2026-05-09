@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Temporary trial config generator for RNA-OmniDiffusion.
+"""Temporary trial config generator for RNA-OmniPrefold.
 
 Copies a base YAML config and applies overrides via --set key=value,
 writing a self-contained config.yaml, changes.json (diff), and README.md

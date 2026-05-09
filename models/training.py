@@ -64,7 +64,6 @@ def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
         if src in training:
             training[dst] = training[src]
     training.setdefault("lambda_pair", training.get("lambdaPair", 0.5))
-    training.setdefault("lambda_distill", training.get("lambdaDistill", 0.0))
     training.setdefault("pair_positive_weight", training.get("pairWeight", "auto"))
     training.setdefault("pair_negative_ratio", training.get("pairRatio", 3))
     training.setdefault("output_dir", training.get("out", "outputs/archive"))
@@ -85,7 +84,6 @@ def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     model.setdefault("distbuckets", 32)
     model.setdefault("distmax", data.get("max_length", 512))
     model.setdefault("invalidlogit", -20.0)
-    model.setdefault("distill_dim", model.get("rnafm_embedding_dim", 0))  # RNA-FM teacher provides sequence-level embedding only
     tasks = config.setdefault("tasks", {})
     if "seq_denoise" in tasks and "denoise" not in tasks:
         tasks["denoise"] = tasks["seq_denoise"]
@@ -225,10 +223,6 @@ def build_model(config: Dict[str, Any], tokenizer: RNAOmniTokenizer, device: tor
         pairrefinechannels=int(model_cfg.get("pairrefinechannels", 16)),
         pairrefineblocks=int(model_cfg.get("pairrefineblocks", 1)),
         pairrefinedrop=float(model_cfg.get("pairrefinedrop", 0.0)),
-        distill_dim=int(model_cfg.get("distill_dim", model_cfg.get("rnafm_embedding_dim", 0)) or 0),
-        use_distill_head=bool(model_cfg.get("use_distill_head", False)),
-        teacher_dim=int(model_cfg.get("teacher_dim", 640)),
-        distill_pool=str(model_cfg.get("distill_pool", "mean")),
     )
     return model.to(device)
 
@@ -245,8 +239,8 @@ ENCODER_PRETRAIN_PREFIXES = (
 
 
 def load_encoder_only_pretrain(model: RNAOmniDiffusion, ckpt_path: str | Path, device: torch.device) -> dict:
-    # Encoder-only loading: skips pair head, distill head, and other task-specific heads.
-    # Used for RNA-OmniDistill Stage 1 -> Stage 2 transition.
+    # Encoder-only loading skips pair and task-specific heads.
+    # Used for RNA-OmniPrefold Stage 1 -> Stage 2 transition.
     _, _, checkpoint = load_checkpoint(ckpt_path, device)
     source = checkpoint["model_state"]
     target = model.state_dict()
@@ -448,8 +442,6 @@ def estimate_loss_options(config: Dict[str, Any], dataset: RNAOmniDataset, token
         "lambda_pair": float(training.get("lambda_pair", 0.5)),
         "lambda_seq": float(training.get("lambda_seq", 1.0)),
         "lambda_struct": float(training.get("lambda_struct", 1.0)),
-        "lambda_distill": float(training.get("lambda_distill", 0.0)),
-        "distill_loss_type": str(training.get("distill_loss", training.get("distill_loss_type", "mse"))),
         "token_id_weights": token_weights,
         "pair_pos_weight": pair_pos_weight,
         "pair_options": {
@@ -481,14 +473,12 @@ def loss_from_batch(outputs: dict, batch: dict, loss_options: dict) -> dict:
         pair_pos_weight=loss_options["pair_pos_weight"],
         use_pair_loss=loss_options["use_pair_loss"],
         pair_options=loss_options.get("pair_options"),
-        lambda_distill=loss_options.get("lambda_distill", 0.0),
-        distill_loss_type=loss_options.get("distill_loss_type", "mse"),
     )
 
 
 def update_running(total: dict, loss_dict: dict, batch_size: int) -> None:
     total["samples"] += batch_size
-    for key in ("loss", "token_loss", "pair_loss", "conflict_loss", "distill_loss"):
+    for key in ("loss", "token_loss", "pair_loss", "conflict_loss"):
         total[key] += float(loss_dict[key].detach().cpu()) * batch_size
     for key in (
         "pos",
@@ -512,8 +502,6 @@ def update_running(total: dict, loss_dict: dict, batch_size: int) -> None:
         "lambdaConflict",
         "mean_row_pair_prob_sum",
         "max_row_pair_prob_sum",
-        "lambda_distill",
-        "teacher_mask_ratio",
     ):
         value = loss_dict.get(key)
         if value is None:
@@ -533,7 +521,6 @@ def averages(total: dict, prefix: str) -> dict:
         f"{prefix}_token_loss": total["token_loss"] / denom,
         f"{prefix}_pair_loss": total["pair_loss"] / denom,
         f"{prefix}_conflict_loss": total["conflict_loss"] / denom,
-        f"{prefix}_distill_loss": total["distill_loss"] / denom,
     }
     for key in (
         "pos",
@@ -557,8 +544,6 @@ def averages(total: dict, prefix: str) -> dict:
         "lambdaConflict",
         "mean_row_pair_prob_sum",
         "max_row_pair_prob_sum",
-        "lambda_distill",
-        "teacher_mask_ratio",
     ):
         count = total.get(f"{key}_count", 0)
         if count:
@@ -627,7 +612,7 @@ def evaluate_model(
     decode_structures: bool = True,
 ) -> dict:
     model.eval()
-    totals = {"samples": 0, "loss": 0.0, "token_loss": 0.0, "pair_loss": 0.0, "conflict_loss": 0.0, "distill_loss": 0.0}
+    totals = {"samples": 0, "loss": 0.0, "token_loss": 0.0, "pair_loss": 0.0, "conflict_loss": 0.0}
     token_correct = 0
     token_count = 0
     pair_diag = {
@@ -699,9 +684,7 @@ def format_epoch_metrics(metrics: dict) -> str:
         "train_token_loss",
         "train_pair_loss",
         "train_conflict_loss",
-        "train_distill_loss",
         "val_loss",
-        "val_distill_loss",
         "val_token_acc",
         "val_pair_precision",
         "val_pair_recall",
@@ -831,7 +814,7 @@ def train_model(
     for epoch in range(start_epoch, int(config["training"]["epochs"]) + 1):
         epoch_start = time.time()
         model.train()
-        train_totals = {"samples": 0, "loss": 0.0, "token_loss": 0.0, "pair_loss": 0.0, "conflict_loss": 0.0, "distill_loss": 0.0}
+        train_totals = {"samples": 0, "loss": 0.0, "token_loss": 0.0, "pair_loss": 0.0, "conflict_loss": 0.0}
         for batch in train_loader:
             batch = move_batch_to_device(batch, device)
             optimizer.zero_grad(set_to_none=True)
@@ -853,8 +836,7 @@ def train_model(
                     f"loss={float(loss.detach().cpu()):.4f} "
                     f"token={float(loss_dict['token_loss'].cpu()):.4f} "
                     f"pair={float(loss_dict['pair_loss'].cpu()):.4f} "
-                    f"conflict={float(loss_dict['conflict_loss'].cpu()):.4f} "
-                    f"distill={float(loss_dict['distill_loss'].cpu()):.4f}"
+                    f"conflict={float(loss_dict['conflict_loss'].cpu()):.4f}"
                 )
             if max_steps is not None and global_step >= max_steps:
                 break

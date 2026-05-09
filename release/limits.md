@@ -1,4 +1,4 @@
-# RNA-OmniDiffusion Candidate Limitations
+# RNA-OmniPrefold Candidate Limitations
 
 ## Structural Validity
 

@@ -9,6 +9,10 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
+
+def parts(*items: str) -> str:
+    return "".join(items)
+
 TEXT_SUFFIXES = {".py", ".md", ".yaml", ".yml", ".json", ".toml", ".txt"}
 EXCLUDED_DIRS = {".git", "outputs", "dataset", "external", "checkpoints", "__pycache__"}
 BLOCKED_STAGE_PREFIXES = (
@@ -18,7 +22,7 @@ BLOCKED_STAGE_PREFIXES = (
 )
 BLOCKED_STAGE_EXACT = {
     ".env",
-    "external/model.safetensors",
+    parts("external/model", ".safetensors"),
     "bpRNA_1m_90.zip",
     "rnacentral_active.fasta.gz",
 }
@@ -29,10 +33,6 @@ BLOCKED_STAGE_SUFFIXES = (
     ".ckpt",
     ".safetensors",
 )
-
-
-def parts(*items: str) -> str:
-    return "".join(items)
 
 
 LEGACY_ASSISTANT_RESIDUALS = [
@@ -50,7 +50,6 @@ LEGACY_ASSISTANT_RESIDUALS = [
 MAINLINE_DOCS = [
     "README.md",
     "INDEX.md",
-    "docs/rna_omnidistill.md",
     "docs/usage.md",
 ]
 FORBIDDEN_MAINLINE_PHRASES = [
@@ -63,6 +62,28 @@ FORBIDDEN_MAINLINE_PHRASES = [
     parts("scripts/", "l", "lm.py"),
     parts("python ", "ag", "ent.py"),
     parts("python -m ", "ag", "ent"),
+]
+REMOVED_MAINLINE_PATHS = [
+    "models/teacher",
+    parts("scripts/extract_", "rna", "fm_embeddings.py"),
+    parts("config/seq_pretrain_", "rna", "fm.yaml"),
+    parts("config/candidate_from_", "rna", "fm_pretrain.yaml"),
+    parts("config/candidate_from_", "rna", "fm_pretrain_msmprm.yaml"),
+]
+FORBIDDEN_MAINLINE_PATTERNS = [
+    re.compile(
+        "|".join(
+            [
+                parts("RNA", "-", "FM"),
+                parts("rna", "fm"),
+                parts("distill", "_head"),
+                parts("lambda", "_distill"),
+                parts("teacher", "_embedding"),
+                parts("model", r"\.safetensors"),
+            ]
+        ),
+        re.IGNORECASE,
+    ),
 ]
 SENSITIVE_PATTERN = re.compile(
     "|".join([
@@ -165,6 +186,26 @@ def forbidden_doc_hits() -> list[str]:
     return hits
 
 
+def removed_mainline_residuals() -> list[str]:
+    return [item for item in REMOVED_MAINLINE_PATHS if (PROJECT_ROOT / item).exists()]
+
+
+def forbidden_mainline_hits() -> list[str]:
+    hits: list[str] = []
+    for path in iter_project_text_files():
+        relative = rel(path)
+        if relative == "docs/negative.md":
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line_no, line in enumerate(lines, start=1):
+            if any(pattern.search(line) for pattern in FORBIDDEN_MAINLINE_PATTERNS):
+                hits.append(f"{relative}:{line_no}")
+    return hits
+
+
 def candidate_diff_exists() -> bool:
     return bool(run_git(["diff", "--", "config/candidate.yaml"]))
 
@@ -177,6 +218,8 @@ def run_clean(args: argparse.Namespace) -> None:
         "sensitive_hits": current_sensitive_hits(),
         "legacy_assistant_residual_files": residual_legacy_assistant_files(),
         "forbidden_mainline_doc_hits": forbidden_doc_hits(),
+        "removed_mainline_residuals": removed_mainline_residuals(),
+        "forbidden_removed_stack_hits": forbidden_mainline_hits(),
     }
 
     if report["candidate_yaml_has_diff"]:
@@ -189,6 +232,10 @@ def run_clean(args: argparse.Namespace) -> None:
         warnings.append("legacy assistant or language-model semantic files remain in the working tree")
     if report["forbidden_mainline_doc_hits"]:
         warnings.append("forbidden legacy assistant or language-model framing remains in mainline docs")
+    if report["removed_mainline_residuals"]:
+        warnings.append("removed mainline files or directories still exist")
+    if report["forbidden_removed_stack_hits"]:
+        warnings.append("removed stack terms remain outside negative-results documentation")
 
     report["status"] = "PASS" if not warnings else "FAIL"
     report["warnings"] = warnings
@@ -208,6 +255,8 @@ def run_clean(args: argparse.Namespace) -> None:
         f"- possible sensitive hits: {len(report['sensitive_hits'])}",
         f"- legacy assistant residual files: {len(report['legacy_assistant_residual_files'])}",
         f"- forbidden mainline doc hits: {len(report['forbidden_mainline_doc_hits'])}",
+        f"- removed mainline residuals: {len(report['removed_mainline_residuals'])}",
+        f"- removed stack text hits: {len(report['forbidden_removed_stack_hits'])}",
         "",
         "## Warnings",
     ]
@@ -220,7 +269,7 @@ def run_clean(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Audit RNA-OmniDistill local cleanup state.")
+    parser = argparse.ArgumentParser(description="Audit RNA-OmniPrefold local cleanup state.")
     sub = parser.add_subparsers(dest="cmd", required=True)
     clean = sub.add_parser("clean")
     clean.add_argument("--out", default="outputs/clean")

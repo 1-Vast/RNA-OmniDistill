@@ -940,7 +940,7 @@ def run_ablate(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run compact RNA-OmniDiffusion workflows.")
+    parser = argparse.ArgumentParser(description="Run compact RNA-OmniPrefold workflows.")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sweep = sub.add_parser("sweep")
     sweep.add_argument("--mode", choices=["quick", "full"], default="quick")
@@ -1155,14 +1155,10 @@ def run_summarize(args: argparse.Namespace) -> None:
             last_row = train_rows[-1] if train_rows else {}
             train_loss = as_float(last_row.get("train_loss"))
             val_loss = as_float(last_row.get("val_loss"))
-            train_distill = as_float(last_row.get("train_distill_loss"))
-            val_distill = as_float(last_row.get("val_distill_loss"))
             init_from_pretrain = str(last_row.get("init_from_pretrain", ""))
-            lambda_distill = as_float(last_row.get("lambda_distill"))
         else:
-            train_loss = val_loss = train_distill = val_distill = 0.0
+            train_loss = val_loss = 0.0
             init_from_pretrain = ""
-            lambda_distill = 0.0
             last_row = {}
 
         # --- config for type detection ---
@@ -1172,28 +1168,20 @@ def run_summarize(args: argparse.Namespace) -> None:
             train_config = config.get("training", {})
             data_cfg = config.get("data", {})
             config_init = str(train_config.get("init_from_pretrain", ""))
-            config_lambda = as_float(train_config.get("lambda_distill", 0.0))
             config_train_jsonl = str(data_cfg.get("train_jsonl", ""))
         else:
             # fallback to jsonl metadata
             config_init = init_from_pretrain
-            config_lambda = lambda_distill
             config_train_jsonl = ""
 
         # --- detect config type ---
         has_pretrain = bool(config_init)
         if not has_pretrain:
             config_type = "supervised baseline"
-        elif "rfam" in config_train_jsonl.lower() and config_lambda == 0.0:
-            config_type = "D-only from Rfam"
-        elif "rnafm" in config_train_jsonl.lower() and config_lambda > 0.0:
-            config_type = "D-RNAFM from Rfam"
         elif "rfam" in config_train_jsonl.lower():
             config_type = "D-only from Rfam"
-        elif "rnafm" in config_train_jsonl.lower():
-            config_type = "D-RNAFM from Rfam"
         else:
-            config_type = "supervised baseline"
+            config_type = "sequence-pretrained"
 
         # --- pretrain trainlog ---
         pretrain_info = {}
@@ -1202,12 +1190,8 @@ def run_summarize(args: argparse.Namespace) -> None:
             pretrain_log = read_jsonl(pretrain_dir / "trainlog.jsonl")
             if pretrain_log:
                 best_val = min(as_float(r.get("val_loss", float("inf"))) for r in pretrain_log)
-                pt_last = pretrain_log[-1]
                 pretrain_info = {
                     "pretrain_best_val_loss": best_val,
-                    "pretrain_train_distill_loss": as_float(pt_last.get("train_distill_loss")),
-                    "pretrain_val_distill_loss": as_float(pt_last.get("val_distill_loss")),
-                    "pretrain_teacher_mask_ratio": as_float(pt_last.get("teacher_mask_ratio")),
                 }
 
         row = {
@@ -1223,8 +1207,6 @@ def run_summarize(args: argparse.Namespace) -> None:
             "avg_true_pair_count": avg_true,
             "train_loss": train_loss,
             "val_loss": val_loss,
-            "train_distill_loss": train_distill,
-            "val_distill_loss": val_distill,
             "checkpoint_path": ckpt_path,
             "config_path": str(config_path) if config_path.exists() else "",
             "benchmark_found": benchmark_exists,

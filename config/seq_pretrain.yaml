@@ -1,11 +1,9 @@
-# Stage 1 (D-only): Sequence-only MLM pretraining (no RNA-FM teacher)
-# RNA-OmniDistill ablation baseline
+# Stage 1: Sequence-only masked denoising pretraining
+# RNA-OmniPrefold pretraining baseline
 # - Input: unlabeled RNA sequences (allow_unlabeled=true)
 # - Task: masked nucleotide denoising (seq_denoise=1.0)
-# - No teacher distillation (lambda_distill=0.0)
 # - No pair head/loss/Nussinov during pretraining
-# - Loss: L_pretrain = L_denoise (no distillation term)
-# - Purpose: Isolate D-only MLM contribution vs D-RNAFM
+# - Loss: L_pretrain = L_denoise
 
 data:
   train_jsonl: dataset/unlabeled/train_seq.jsonl
@@ -28,10 +26,6 @@ model:
   num_heads: 8
   dropout: 0.1
   max_position_embeddings: 2048
-  # No distillation head — D-only baseline
-  use_distill_head: false
-  teacher_dim: 640
-  distill_pool: mean
 
 training:
   batch_size: 64
@@ -42,7 +36,6 @@ training:
   lambda_seq: 1.0
   lambda_struct: 0.0
   lambda_pair: 0.0
-  lambda_distill: 0.0  # No RNA-FM distillation
   grad_clip: 1.0
   amp: true
   seed: 42

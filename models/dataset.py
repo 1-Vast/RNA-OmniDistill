@@ -107,16 +107,6 @@ class RNAOmniDataset:
             "length": len(seq),
             "is_labeled": bool(is_labeled),
         }
-        for key in (
-            "teacher_embedding",
-            "teacher_embedding_file",
-            "teacher_embedding_index",
-            "teacher_embedding_dim",
-        ):
-            if key in raw and raw[key] is not None:
-                sample[key] = raw[key]
-        if raw.get("teacher_embedding"):
-            sample["teacher_embedding"] = str(raw["teacher_embedding"])
         return sample
 
     def _normalize_pairs(
