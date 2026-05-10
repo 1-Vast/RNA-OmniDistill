@@ -2,29 +2,20 @@
 
 Relation-aware Masked Denoising for Constraint-Guided RNA Folding.
 
-## Validated Mainline
+## Validated Configuration
 
 ```
-RNA-OmniPrefold =
-  MS-MPRM
-  + PairRefine
-  + pair-aware masking
-  + rule hard replay
-  + strict Nussinov decode
+MS-MPRM + PairRefine + pair-aware masking + corrected lr schedule + strict Nussinov decode
 ```
 
 ## Key Results
 
-| Method | Steps | F1 | Notes |
+| Config | lr | Steps | F1 |
 |---|---|---|---|
-| MS-MPRM + hard replay | 300 | 0.2076 | current best 300-step |
-| MS-MPRM baseline | 300 | 0.2009 | no replay |
-| MS-MPRM | 500 | 0.2527 | current overall best |
-| no-pref | 500 | 0.2440 | BCE only |
-
-- Hard replay adds +0.0067 at 300 steps by duplicating selected hard samples
-- PairRefine is essential (refine-off drops to 0.1879)
-- More training provides major gains (300→500: +0.043)
+| **Corrected baseline** | **0.0010** | **300** | **0.3235** |
+| MS-MPRM + hard replay | 0.0001 | 300 | 0.2076 |
+| MS-MPRM | 0.0001 | 500 | 0.2527 |
+| MS-MPRM | 0.0001 | 300 | 0.2009 |
 
 ## Quick Start
 
@@ -37,16 +28,18 @@ python scripts/eval.py bench --config config/msmprm.yaml --ckpt outputs/msmprm/b
 
 ## LLM Status
 
-LLM-assisted strategies (semantic tokens, preference optimization, reranker, curriculum, hard replay curation, decode policy search) were systematically evaluated but did not outperform deterministic rule-based baselines under controlled comparisons.
+After systematic evaluation of 15+ LLM integration routes (semantic tokens, preference optimization, reranker, curriculum, hard replay curator, decode policy, query adapter, PairLossPolicy, structural auxiliary, macro configuration planner), **no LLM route demonstrated independent contribution beyond deterministic rule-based baselines**.
 
-**LLM modules are not part of the validated mainline.** See [docs/negative.md](docs/negative.md) for full experimental record.
+The corrected learning-rate schedule (lr=0.0010) was identified through macro configuration search and verified by controlled grid search, improving F1 from 0.2009 to 0.3235.
+
+See [docs/negative.md](docs/negative.md) for complete experimental record.
 
 ## Repository
 
 ```
 main.py
 models/  omni.py training.py dataset.py collator.py decode.py mask.py
-scripts/ eval.py data.py run.py curate.py replay.py audiflow.py
+scripts/ eval.py data.py run.py searchplan.py audiflow.py rerank.py
 config/  msmprm.yaml candidate.yaml
 docs/    negative.md architecture.md
 utils/   metric.py struct.py
