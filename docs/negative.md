@@ -1,59 +1,40 @@
-# Negative Results
+# Negative / Inconclusive Results
 
-This document records experimental branches that were tested but are excluded from the RNA-OmniPrefold mainline.
+This document records all experimental routes tested but not adopted as mainline contributions in RNA-OmniPrefold.
 
-## Sequence-Level Representation Distillation (RNA-FM)
+| Route | Result | Evidence | Decision |
+|---|---|---|---|
+| RNA-FM distillation | Weak | Isolated contribution small; D-only matched teacher on toy data | Deleted |
+| LLM semantic tokens | Negative | Pair F1 dropped from 0.5723 to 0.3851 | Not recovered |
+| LLM preference (full-budget) | Inconclusive | 500-step: no-pref 0.2440, oracle pref 0.2447, RAG pref 0.2442 | Not mainline |
+| Low-label | Confounded | same-step advantage was epoch exposure artifact | Not pursued |
+| Fine-grained relation_mask | Insufficient | Only affects token denoising, not Pair BCE | Not mainline |
+| PairLossPolicy / weighted BCE | Negative | Vectorized but hard_negative_weight=2.0 does not change F1 | Not continued |
+| LLM architecture proposer | Suspended | Non-LLM search space too small | Not continued |
+| LLM reranker (free) | Negative | F1=0.1025 vs Rule=0.1223 | Not valid module |
+| LLM reranker (constrained) | Inconclusive | F1=0.1223 equals Rule, no added value | Not valid module |
+| No-LLM structural tagaux | Negative | λ=0.03 unchanged (0.2009), λ=0.20 degrades (0.1899) | Not recommended |
+| LLM structured tags / CLIP | Not entered | No-LLM tagaux showed no positive signal | Deferred |
 
-Sequence-level teacher distillation (RNA-FM) was tested as an optional sequence-pretraining signal and has been removed from the mainline. All RNA-FM related code (models/teacher, scripts/extract_rnafm_embeddings.py, RNA-FM configs) has been deleted from the main branch.
+## Details
 
-Evidence:
+### RNA-FM Distillation
+Sequence-level teacher distillation tested as optional pretraining signal. Toy comparison: D-only and teacher both reached Pair F1 0.8333. Fine-tune val loss slightly worse with teacher (1.0245 vs 0.9643). Removed from mainline.
 
-- Local toy comparison on 2026-05-09: D-only and teacher-distilled pretraining both reached the same strict Nussinov test Pair F1 of 0.8333 on the 2-sample toy test split.
-- In that toy run, fine-tune best validation loss was slightly worse with teacher distillation: 1.0245 vs 0.9643 for D-only.
-- In the earlier Rfam 50k single-seed comparison, the isolated teacher contribution was small: Pair F1 0.5969 vs 0.5925 for D-only, a +0.44pp difference.
+### LLM Semantic Tokens
+Sample-level biological hints injected as condition tokens. Coverage low (most SEM_UNKNOWN). F1 dropped from 0.5723 to 0.3851. Conclusion: semantic tokens are not part of mainline.
 
-Conclusion: RNA-FM sequence-level representation distillation is no longer part of this repository. Deleted on 2026-05-09 (commit 6e9e468).
+### LLM Preference / RAG Preference
+Low-beta (0.005) + warmup shows early-stage signal (+0.0121 at 300 steps). Full-budget (500 steps) shows negligible gain (+0.0007). Preference is not a cumulative performance booster.
 
-## LLM Semantic Conditioning
+### Low-label Confound
+Low10 appeared to outperform full at same-step (0.1954 vs 0.1852). Same-epoch comparison corrected: low10 45 steps (0.1414) vs full 300 steps (0.1852). Artifact of imbalanced epoch exposure.
 
-LLM semantic token conditioning was tested as an auxiliary conditioning path, where a general-purpose model generated sample-level biological hints that were injected as condition tokens.
+### PairLossPolicy
+Implemented 100% vectorized weighted BCE with canonical/distance masks. hard_negative_weight=2.0 does not change Pair F1 from MS-MPRM baseline at 300 steps.
 
-Results:
+### LLM Reranker
+Free LLM reranker (F1=0.1025) underperforms Rule Reranker (F1=0.1223). Constrained LLM equals Rule. Oracle Top-K upper bound exists (0.1490) but LLM cannot approach it.
 
-| Model | Pair F1 | Precision | Recall | Valid |
-|---|---:|---:|---:|---:|
-| Baseline supervised | 0.5723 | 0.5246 | 0.6322 | 1.0000 |
-| LLM semantic tokens | 0.3851 | 0.3499 | 0.4299 | 1.0000 |
-
-Likely causes:
-
-- Low coverage: most samples used fallback unknown semantic tokens.
-- Fallback token noise changed the input distribution.
-- Sample-level semantic hints were poorly aligned with pair-level structure prediction.
-- The model can already derive many simple sequence properties directly from sequence tokens.
-
-Conclusion: LLM semantic tokens are not part of the mainline.
-
-## Token-Only Decode
-
-Token-only decoding without strict constraint projection produced invalid structures in diagnostic runs.
-
-Conclusion: strict Nussinov projection remains part of the default inference path.
-
-## Greedy Decode As Final Metric
-
-Greedy pair decoding can be useful as a pair-head probe but may produce invalid or over-paired outputs.
-
-Conclusion: final benchmark metrics should use strict Nussinov decoding.
-
-## Conflict Loss
-
-Conflict loss was tested as a precision-oriented regularizer and did not produce a reliable improvement over the baseline pair loss.
-
-Conclusion: conflict loss is excluded from the main training objective.
-
-## Masking Variants
-
-Pair-aware masking and motif-span masking variants were tested in ablations. Current evidence is inconclusive or negligible on ArchiveII.
-
-Conclusion: they are not claimed as main contributions.
+### Structural Tag Auxiliary
+Struct_aux infrastructure built. No-LLM tagaux at λ=0.03 unchanged from MS-MPRM. λ=0.20 degrades F1 to 0.1899. Auxiliary task interferes with Pair BCE.
